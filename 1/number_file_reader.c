@@ -2,6 +2,13 @@
 
 #include <stdbool.h>
 #include <string.h>
+#include <stdlib.h>
+#include <assert.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <stdio.h>
 
 typedef struct file_read_state
 {
@@ -35,7 +42,7 @@ file_read_state* file_read_state_new(int fd, int buffer_size)
         return NULL;
     }
 
-    file_read_state *state = malloc(sizeof(file_read_state));
+    file_read_state *state = (file_read_state*) malloc(sizeof(file_read_state));
     state->fd = fd;
     state->buf = (char*) malloc(buffer_size);
     state->max_size = buffer_size;
@@ -79,7 +86,7 @@ static void read_next_chunk(file_read_state *state)
      */
     int to_read = state->max_size - left;
     assert(to_read + left <= state->max_size);
-    int read_count = read(state, state->buf + left, to_read);
+    int read_count = read(state->fd, state->buf + left, to_read);
     if (read_count == -1)
     {
         perror("read");
@@ -102,7 +109,6 @@ static bool skip_whitespaces(file_read_state *state)
         if (state->size <= state->pos)
         {
             read_next_chunk(state);
-            coro_yield();
             continue;
         }
 

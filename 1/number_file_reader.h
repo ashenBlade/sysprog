@@ -2,6 +2,7 @@
 #define NUMBER_FILE_READER_H
 
 #include <ctype.h>
+#include <stdbool.h>
 
 /**
  * @brief Структура, представляющая состояние чтения чисел из файла

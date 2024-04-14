@@ -128,8 +128,8 @@ bool priority_queue_try_dequeue(priority_queue_t *pq, int *key, void **value)
     
 
     pq_entry_t top_entry = pq->heap[0];
-    key = top_entry.key;
-    value = top_entry.value;
+    *key = top_entry.key;
+    *value = top_entry.value;
 
     if (pq->size == 1)
     {
@@ -139,7 +139,7 @@ bool priority_queue_try_dequeue(priority_queue_t *pq, int *key, void **value)
     }
 
     swap(pq->heap, 0, pq->size - 1);
-    pq->size - 1;
+    pq->size -= 1;
     heapify_down(pq);
     return true;
 }

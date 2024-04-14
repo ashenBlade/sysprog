@@ -13,7 +13,7 @@ void insertion_sort_init(insertion_sort_state *state)
     state->capacity = 0;
 }
 
-void insertion_sort_clear(insertion_sort_state *state)
+void insertion_sort_free(insertion_sort_state *state)
 {
     free(state->array);
     state->array = NULL;
@@ -91,14 +91,7 @@ void insertion_sort_insert(insertion_sort_state *state, int number)
     insert_at_index(state, index_to_insert, number);
 }
 
-static int empty_array[0] = {};
-
 const int *insertion_sort_array(insertion_sort_state *state)
 {
-    if (IS_EMPTY(state))
-    {
-        return &empty_array;
-    }
-
     return state->array;
 }

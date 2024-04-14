@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
+#include <assert.h>
 #include <stdlib.h>
 
 #include "merge_files.h"
@@ -15,9 +16,10 @@ typedef struct page_file_writer_state
     int fd;
 } page_writer_t;
 
-static void page_writer_init(page_writer_t *writer, int capacity)
+static void page_writer_init(page_writer_t *writer, int fd, int capacity)
 {
     writer->chunk = (char *)malloc(sizeof(char) * capacity);
+    writer->fd = fd;
     writer->capacity = capacity;
     writer->size = 0;
 }
@@ -55,7 +57,7 @@ static void page_writer_flush(page_writer_t *writer)
 static void page_writer_write(page_writer_t *writer, int number)
 {
     char buf[11 /* 10 (цифр в числе) + 1 (пробел) */];
-    int buf_size = snprintf(buf, "%d ", 11);
+    int buf_size = snprintf(buf, 11, "%d ", number);
     int chunk_left = writer->capacity - writer->size;
 
     if (buf_size <= chunk_left)
@@ -172,7 +174,7 @@ static void merge_state_init(merge_state *state, int *fds, int count)
     priority_queue_init(&state->pq);
     state->count = count;
     page_reader *readers = (page_reader *)malloc(sizeof(page_reader) * count);
-    for (size_t i = 0; i < count; i++)
+    for (long i = 0; i < count; i++)
     {
         page_reader *reader = &readers[i];
         page_reader_init(reader, fds[i], 4096);
@@ -187,7 +189,7 @@ static void merge_state_init(merge_state *state, int *fds, int count)
 
 static void merge_state_free(merge_state *state)
 {
-    for (size_t i = 0; i < state->count; i++)
+    for (long i = 0; i < state->count; i++)
     {
         page_reader_delete(&state->readers[i]);
     }
@@ -219,7 +221,7 @@ void merge_files(int result_fd, int *fds, int count)
     merge_state_init(&state, fds, count);
     
     page_writer_t writer;
-    page_writer_init(&writer, 4096);
+    page_writer_init(&writer, result_fd, 4096);
 
     int number;
     while (merge_state_try_read_next_number(&state, &number))

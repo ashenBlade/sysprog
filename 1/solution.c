@@ -2,10 +2,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 #include "libcoro.h"
 #include "utils.h"
-#include 
+#include "external_sort.h"
+#include "merge_files.h"
 
 /**
  * You can compile and run this code using the commands:
@@ -20,21 +25,40 @@ typedef struct sort_context
     int coroutine_id;
 
     /// @brief Название файла для сортировки
-    const char *filename;
+    char *filename;
+
+    /**
+     * @brief Дескриптор исходного файла
+     */
+    int fd;
+
+    /**
+     * @brief Временный файл, в который необходимо сохранять отсортированные значения
+     */
+    temp_file_t temp_file;
 } sort_context;
 
-static struct sort_context *
-sort_context_new(int id, const char *filename)
+static void
+sort_context_init(struct sort_context *ctx, int id, const char *filename)
 {
-    struct sort_context *ctx = malloc(sizeof(*ctx));
+    int fd = open(filename, O_RDONLY);
+    if (fd == -1)
+    {
+        perror("open");
+        exit(1);
+    }
+
+    temp_file_init(&ctx->temp_file);
     ctx->coroutine_id = id;
     ctx->filename = strdup(filename);
-    return ctx;
+    ctx->fd = fd;
 }
 
 static void
 sort_context_delete(struct sort_context *ctx)
 {
+    close(ctx->fd);
+    temp_file_free(&ctx->temp_file);
     free(ctx->filename);
     free(ctx);
 }
@@ -46,32 +70,15 @@ static int
 sort_external_coro(void *context)
 {
     struct coro *this = coro_this();
+    (void)this;
     sort_context *ctx = context;
-    // void print_error_file_open(const char *filename)
-    // {
-    //     write(STDERR_FILENO, "Ошибка открытия файла: ", strlen("Ошибка открытия файла: "));
-    //     write(STDERR_FILENO, filename, strlen(filename));
-    //     write(STDERR_FILENO, "\n", sizeof("\n"));
-    // }
-    // int src_file_fd = open(src, O_RDONLY);
-    // if (src_file_fd == -1)
-    // {
-    //     print_error_file_open(src);
-    //     return 1;
-    // }
 
-    // int temp_file_fd = open(temp, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
-    // if (temp_file_fd == -1)
-    // {
-    //     close(src_file_fd);
-    //     print_error_file_open(temp);
-    //     return 1;
-    // }
+    sort_file_external_coro(ctx->fd, ctx->temp_file.fd);
 
     return 0;
 }
 
-void global_init(int argc, char **argv)
+void global_init(int argc, const char **argv)
 {
     (void)argc;
     (void)argv;
@@ -79,31 +86,33 @@ void global_init(int argc, char **argv)
     coro_sched_init();
 }
 
-int main(int argc, char **argv)
+int main(int argc, const char **argv)
 {
     global_init(argc, argv);
-    const char **filenames = extract_filenames(argc, argv);
-
+    int files_count;
+    const char **filenames = extract_filenames(argc, argv, &files_count);
     assert(filenames != NULL);
 
     /*
      * Запускаем корутины для каждого файла в списке
      */
-    int id = 0;
-    while (filenames[id] != NULL)
+    sort_context *contexts = (sort_context *)malloc(sizeof(sort_context) * files_count);
+    for (long i = 0; i < files_count; i++)
     {
-        coro_new(sort_external_coro, sort_context_new(id, filenames[id]));
-        ++id;
+        /* code */
+        sort_context *cur_ctx = &contexts[i];
+        sort_context_init(cur_ctx, i, filenames[i]);
+        coro_new(sort_external_coro, cur_ctx);
     }
 
-    /* 
+    /*
      * Запускаем корутины и ждем их завершения
      */
     struct coro *c;
     while ((c = coro_sched_wait()) != NULL)
     {
-        /* TODO: добавить проверку кода результата. 
-         * Если ошибка - завершаем работу и показываем сообщение об ошибке 
+        /* TODO: добавить проверку кода результата.
+         * Если ошибка - завершаем работу и показываем сообщение об ошибке
          */
         printf("Finished %d\n", coro_status(c));
         coro_delete(c);
@@ -111,7 +120,27 @@ int main(int argc, char **argv)
 
     /* Все корутины завершились - запускаем мерж всех файлов */
 
-    /* TODO: слияние */
+    int *fds = (int *)malloc(sizeof(int) * files_count);
+    for (long i = 0; i < files_count; i++)
+    {
+        fds[i] = contexts[i].temp_file.fd;
+    }
+
+    int result_fd = open("result.txt", O_CREAT | O_TRUNC | O_WRONLY);
+    if (result_fd != -1)
+    {
+        perror("open");
+        exit(1);
+    }
+
+    merge_files(result_fd, fds, files_count);
+
+    close(result_fd);
+
+    for (long i = 0; i < files_count; i++)
+    {
+        sort_context_delete(&contexts[i]);
+    }
 
     return 0;
 }
