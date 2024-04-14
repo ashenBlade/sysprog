@@ -1,0 +1,360 @@
+#include <unistd.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <fcntl.h>
+#include <string.h>
+#include <assert.h>
+#include <stdio.h>
+#include <ctype.h>
+
+#include "external_sort.h"
+#include "quick_sort.h"
+#include "libcoro.h"
+
+#define TEMP_FILE_CHUNK_SIZE 4096
+#define NUMBERS_BUFFER_MAX_SIZE TEMP_FILE_CHUNK_SIZE / sizeof(int)
+
+typedef struct file_read_state
+{
+    /// @brief Дескриптор файла, из которого мы читаем данные
+    int fd;
+    /// @brief Буфер с прочитанными данными
+    char *buf;
+    /// @brief Максимальный размер буфера
+    size_t max_size;
+    /// @brief Текущий размер буфера
+    size_t size;
+    /// @brief Текущая позиция в буфере, откуда читаем данные
+    size_t pos;
+    /// @brief Достигнут ли конец файла
+    bool eof;
+} file_read_state;
+
+/// @brief Достигнут ли конец файла
+#define IS_EOF(state) ((state)->eof)
+
+/// @brief Достигнут ли конец текущего чанка
+#define IS_END_BUFFER(state) ((state)->size <= (state)->pos)
+
+/// @brief Получить текущий символ, без увеличения длины
+#define CUR_CHAR(state) ((state)->buf[(state)->pos])
+
+static void read_next_chunk(file_read_state *state)
+{
+    assert(!state->eof);
+
+    /*
+     * Переносим оставшиеся данные в начало буфера и размер
+     */
+    int left = state->size - state->pos;
+    if (left != 0)
+    {
+        memcpy(state->buf, state->buf + state->pos, left);
+        state->pos = left;
+    }
+    else
+    {
+        state->pos = 0;
+    }
+
+    /*
+     * Заполняем оставшееся место в буфере (читаем оставшееся)
+     */
+    int to_read = state->max_size - left;
+    assert(to_read + left <= state->max_size);
+    int read_count = read(state, state->buf + left, to_read);
+    if (read_count == -1)
+    {
+        perror("read");
+        exit(1);
+    }
+
+    if (read_count == 0)
+    {
+        state->eof = true;
+    }
+
+    state->size = left + read_count;
+}
+
+static bool skip_whitespaces(file_read_state *state)
+{
+    while (!IS_EOF(state))
+    {
+        /* Читаем новый чанк, если достигли конца текущего */
+        if (state->size <= state->pos)
+        {
+            read_next_chunk(state);
+            coro_yield();
+            continue;
+        }
+
+        /* Проходимся по всему буферу, пока не дойдем до конца */
+        while (!IS_END_BUFFER(state))
+        {
+            if (!isspace(CUR_CHAR(state)))
+            {
+                return true;
+            }
+
+            /* Текущий символ - пустая строка, переходим к следующему */
+            state->pos++;
+        }
+    }
+
+    return false;
+}
+
+static bool read_next_number(file_read_state *state, int *read_number)
+{
+    /*
+     * Пропускаем пустые строки с учетом:
+     * - Их может быть несколько
+     * - Придется прочитать следующий чанк из файла
+     * - Файл закончится
+     */
+    if (!skip_whitespaces(state))
+    {
+        return false;
+    }
+
+    /*
+     * При чтении чанка, число могло быть обрезано.
+     * Поэтому вначале находим конец этого числа:
+     * - Если это пустая строка - то парсим число и возвращаем
+     * - Если достигнут конец буфера - читаем следующий чанк и повторяем
+     */
+    while (!IS_EOF(state))
+    {
+        ingt delta = 1;
+        while (state->pos + delta < state->size)
+        {
+            if (isspace(*(state->buf + delta)))
+            {
+                /* В условии сказано, что числа укладываются в int */
+                int number = (int)strtol(state->buf + state->pos,
+                                         NULL /* Адрес не передаем, т.к. вычислили сами */,
+                                         10);
+                state->pos += delta;
+                *read_number = number;
+                return true;
+            }
+
+            delta++;
+        }
+
+        read_next_chunk(state);
+        if (IS_EOF(state))
+        {
+            /*
+             * Если достигли конца файла, то последнее число - не обрезано.
+             * Возвращаем его и
+             */
+
+            int number = (int)strtol(state->buf + state->pos,
+                                     NULL,
+                                     10);
+            state->pos += delta;
+            *read_number = number;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+typedef struct temp_file_state
+{
+    /// @brief Буфер для хранения прочитанных чисел
+    int *buf;
+    /// @brief Максимальный размер буфера
+    int max_size;
+    /// @brief Текущий размер буфера
+    int size;
+} temp_file_state_t;
+
+static bool try_add_to_temp_buffer(temp_file_state_t *buf, int number)
+{
+    if (buf->size == buf->max_size)
+    {
+        return false;
+    }
+
+    buf->buf[buf->size] = number;
+    buf->size++;
+    return true;
+}
+
+/// @brief Записать временный буфер в файл и очистить состояние
+/// @param state Данные временного файла
+/// @param fd Файл для записи
+/// @remarks Функция не выполняет сортировку - надо делать самим
+static void write_to_temp_file(temp_file_state_t *state, int fd)
+{
+    int left = state->size * sizeof(int);
+    while (0 < left)
+    {
+        int written = write(fd, state->buf, left);
+        if (written == -1)
+        {
+            perror("write");
+            exit(1);
+        }
+        left -= written;
+    }
+
+    state->size = 0;
+}
+
+typedef struct fd_set
+{
+    int size;
+    int pos;
+    int *fds;
+} fd_set_t;
+
+static long get_file_size(int file_fd)
+{
+    loff_t old_offset = lseek64(file_fd, 0, SEEK_CUR);
+    if (old_offset == -1)
+    {
+        perror("lseek64");
+        exit(1);
+    }
+
+    loff_t file_size = lseek64(file_fd, 0, SEEK_END);
+    if (file_size == -1)
+    {
+        perror("lseek64");
+        exit(1);
+    }
+
+    loff_t result_offset = lseek64(file_fd, old_offset, SEEK_SET);
+    if (result_offset == -1)
+    {
+        perror("lseek64");
+        exit(1);
+    }
+    return file_size;
+}
+
+/**
+ * @brief Инициализировать набор fd необходимым количеством временных файлов.
+ * Эта функция определяет размер файла для сортировки и создает необходимое количество файловых дескрипторов временных файлов
+ * @param set Пустой набор fd
+ * @param file_fd Исходный файл
+ * @param chunk_size Размер чанка (одного временного файла)
+ */
+static void fd_set_init(fd_set_t *set, int file_fd, int chunk_size)
+{
+    long file_size = get_file_size(file_fd);
+    long chunks_count = file_size / chunk_size;
+    if (chunks_count * chunk_size != file_size)
+    {
+        chunks_count++;
+    }
+
+    int* fds = (int *)malloc(sizeof(int) * chunks_count);
+    const char *temp_filename_template = "tmp.XXXXXX";
+    char *name_buf[sizeof("tmp.XXXXXX")];
+    strncpy(name_buf, temp_filename_template, sizeof("tmp.XXXXXX"));
+
+    long i = 0;
+    for (; i < chunks_count; i++)
+    {
+        int temp_file_fd = mkstemp(name_buf);
+        if (temp_file_fd == -1)
+        {
+            perror("mkstemp");
+            exit(1);
+        }
+        fds[i] = temp_file_fd;
+    }
+    set->fds = fds;
+    set->size = chunks_count;
+    set->pos = 0;
+}
+
+static void fd_set_release(fd_set_t *set)
+{
+    free(set->fds);
+    set->fds = NULL;
+    set->pos = 0;
+    set->size = 0;
+}
+
+static int fd_set_get_next_fd(fd_set_t *set)
+{
+    assert(set->pos < set->size);
+    int fd = set->fds[set->pos];
+    ++set->pos;
+    return fd;
+}
+
+static void sort_and_flush_temp_file(temp_file_state_t *state, fd_set_t *set)
+{
+    if (state->size == 0)
+    {
+        return;
+    }
+
+    int fd = fd_set_get_next_fd(set);
+    quick_sort(state->buf, state->size);
+    write_to_temp_file(state, fd);
+    state->size = 0;
+}
+
+static void read_buffer_build_temp_file_coro(int src_fd, fd_set_t *temp_files, int max_memory_bytes, int *temp_chunk_buf)
+{
+    char *file_buf = (char *)malloc(max_memory_bytes);
+
+    file_read_state source_file_state = {
+        .fd = src_fd,
+        .buf = file_buf,
+        .pos = 0,
+        .max_size = max_memory_bytes,
+        .size = 0};
+
+    temp_file_state_t temp_file_state = {
+        .buf = temp_chunk_buf,
+        .size = 0,
+        .max_size = TEMP_FILE_CHUNK_SIZE};
+
+    int number;
+    while (read_next_number(&source_file_state, &number))
+    {
+        if (!try_add_to_temp_buffer(&temp_file_state, number))
+        {
+            sort_and_flush_temp_file(&temp_file_state, &temp_files);
+            bool success = try_add_to_temp_buffer(&temp_file_state, number);
+            assert(success);
+        }
+    }
+
+
+    sort_and_flush_temp_file(&temp_file_state, &temp_files);
+}
+
+
+
+static void do_merge(int result_fd, int* file_fds, int file_fds_count)
+{
+
+}
+
+int sort_file_external_coro(int src_fd, int temp_fd, int max_memory_bytes)
+{
+    /*
+     * На первом этапе читаем из исходного файла по чанкам и сохраняем во временный файл.
+     * Чтение производим по чанкам различного размера, но записываем чанками размером в 1 страницу - наиболее оптимальный вариант
+     */
+
+    int chunk_buf[NUMBERS_BUFFER_MAX_SIZE];
+    fd_set_t temp_files;
+    fd_set_init(&temp_files, src_fd, max_memory_bytes);
+
+    read_buffer_build_temp_file_coro(src_fd, &temp_files, max_memory_bytes, chunk_buf);
+
+    return 0;
+}
