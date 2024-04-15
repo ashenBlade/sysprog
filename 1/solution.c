@@ -35,7 +35,7 @@ typedef struct sort_context
     /**
      * @brief Временный файл, в который необходимо сохранять отсортированные значения
      */
-    temp_file_t temp_file;
+    temp_file_t* temp_file;
 } sort_context;
 
 static void
@@ -48,7 +48,7 @@ sort_context_init(struct sort_context *ctx, int id, const char *filename)
         exit(1);
     }
 
-    temp_file_init(&ctx->temp_file);
+    ctx->temp_file = temp_file_new();
     ctx->coroutine_id = id;
     ctx->filename = strdup(filename);
     ctx->fd = fd;
@@ -58,7 +58,7 @@ static void
 sort_context_delete(struct sort_context *ctx)
 {
     close(ctx->fd);
-    temp_file_free(&ctx->temp_file);
+    temp_file_free(ctx->temp_file);
     free(ctx->filename);
     free(ctx);
 }
@@ -73,7 +73,7 @@ sort_external_coro(void *context)
     (void)this;
     sort_context *ctx = context;
 
-    sort_file_external_coro(ctx->fd, ctx->temp_file.fd);
+    sort_file_external_coro(ctx->fd, temp_file_fd(ctx->temp_file));
 
     return 0;
 }
@@ -111,9 +111,6 @@ int main(int argc, const char **argv)
     struct coro *c;
     while ((c = coro_sched_wait()) != NULL)
     {
-        /* TODO: добавить проверку кода результата.
-         * Если ошибка - завершаем работу и показываем сообщение об ошибке
-         */
         printf("Finished %d\n", coro_status(c));
         coro_delete(c);
     }
@@ -123,11 +120,20 @@ int main(int argc, const char **argv)
     int *fds = (int *)malloc(sizeof(int) * files_count);
     for (long i = 0; i < files_count; i++)
     {
-        fds[i] = contexts[i].temp_file.fd;
+        int temp_fd = temp_file_fd(contexts[i].temp_file);
+        if (lseek(temp_fd, 0, SEEK_SET) == -1)
+        {
+            perror("lseek");
+            exit(1);
+        }
+
+        fds[i] = temp_fd;
     }
 
-    int result_fd = open("result.txt", O_CREAT | O_TRUNC | O_WRONLY);
-    if (result_fd != -1)
+    int result_fd = open("result.txt",
+                         O_CREAT | O_RDWR | O_APPEND | O_TRUNC,
+                         S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
+    if (result_fd == -1)
     {
         perror("open");
         exit(1);

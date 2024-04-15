@@ -45,3 +45,9 @@ coro_delete(struct coro *c);
 /** Switch to another not finished coroutine. */
 void
 coro_yield(void);
+
+#ifdef NO_CORO
+#define yield() (void)0
+#else
+#define yield() coro_yield()
+#endif /* NO_CORO */

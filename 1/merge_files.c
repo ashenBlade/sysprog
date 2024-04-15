@@ -39,9 +39,10 @@ static void page_writer_flush(page_writer_t *writer)
     }
 
     int left = writer->size;
+    int pos = 0;
     while (0 < left)
     {
-        int written = write(writer->fd, writer->chunk, left);
+        int written = write(writer->fd, writer->chunk + pos, left);
         if (written == -1)
         {
             perror("write");
@@ -49,6 +50,7 @@ static void page_writer_flush(page_writer_t *writer)
         }
 
         left -= written;
+        pos += written;
     }
 
     writer->size = 0;
@@ -98,6 +100,8 @@ static void page_reader_init(page_reader *reader, int fd, int capacity)
     reader->chunk = (char *)malloc(sizeof(char) * capacity);
     reader->capacity = capacity;
     reader->size = 0;
+    reader->pos = 0;
+    reader->eof = false;
 }
 
 static void page_reader_delete(page_reader *reader)
@@ -228,6 +232,7 @@ void merge_files(int result_fd, int *fds, int count)
     {
         page_writer_write(&writer, number);
     }
+
     page_writer_flush(&writer);
 
     page_writer_free(&writer);

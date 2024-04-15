@@ -19,11 +19,11 @@ static void read_and_sort_coro(int src_fd, insertion_sort_state *is, int max_mem
     file_read_state *read_state = file_read_state_new(src_fd, max_memory_bytes);
     
     int number;
-    coro_yield();
+    yield();
     while (file_read_state_get_next_number(read_state, &number))
     {
         insertion_sort_insert(is, number);
-        coro_yield();
+        yield();
     }
 
     file_read_state_delete(read_state);
@@ -45,7 +45,8 @@ static void save_to_temp_file(insertion_sort_state *is, int fd)
         }
 
         pos += written;
-        coro_yield();
+        left -= written;
+        yield();
     }
 }
 

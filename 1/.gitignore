@@ -1,1 +1,4 @@
-numbers*
+*.txt
+!task_eng.txt
+!task_rus.txt
+!CMakeLists.txt

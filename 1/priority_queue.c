@@ -125,7 +125,6 @@ bool priority_queue_try_dequeue(priority_queue_t *pq, int *key, void **value)
     {
         return false;
     }
-    
 
     pq_entry_t top_entry = pq->heap[0];
     *key = top_entry.key;

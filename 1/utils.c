@@ -1,8 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include "utils.h"
 
@@ -37,32 +38,38 @@ const char **extract_filenames(int argc, const char **argv, int *count)
     return filenames;
 }
 
-#define TEMP_FILENAME_MASK "/tmp/coro-sort.XXXXXX"
+#define TEMP_FILE_MASK "/tmp/coro-sort-XXXXXX\0"
 
-void temp_file_init(temp_file_t *temp_file)
+struct temp_file_struct
 {
-    char *buf = (char *)malloc(strlen(TEMP_FILENAME_MASK) * sizeof(char));
-    memcpy(buf, TEMP_FILENAME_MASK, sizeof(TEMP_FILENAME_MASK));
-    int fd = mkstemp(buf);
+    char filename[sizeof(TEMP_FILE_MASK)];
+    int fd;
+};
+
+temp_file_t *temp_file_new()
+{
+    temp_file_t *temp_file = (temp_file_t *)malloc(sizeof(temp_file_t));
+    memcpy(&temp_file->filename, TEMP_FILE_MASK, sizeof(TEMP_FILE_MASK));
+    int fd = mkstemp(temp_file->filename);
     if (fd == -1)
     {
-        perror("mkstemp");
+        perror("open");
         exit(1);
     }
 
-    temp_file->filename = buf;
     temp_file->fd = fd;
+    return temp_file;
+}
+
+int temp_file_fd(temp_file_t *temp_file)
+{
+    return temp_file->fd;
 }
 
 void temp_file_free(temp_file_t *temp_file)
 {
-    if (temp_file->filename == NULL)
-    {
-        return;
-    }
     close(temp_file->fd);
     unlink(temp_file->filename);
-    free(temp_file->filename);
-    temp_file->filename = NULL;
     temp_file->fd = -1;
+    free(temp_file);
 }

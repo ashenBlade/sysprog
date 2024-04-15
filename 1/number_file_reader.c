@@ -35,16 +35,16 @@ typedef struct file_read_state
 /// @brief Получить текущий символ, без увеличения длины
 #define CUR_CHAR(state) ((state)->buf[(state)->pos])
 
-file_read_state* file_read_state_new(int fd, int buffer_size)
+file_read_state *file_read_state_new(int fd, int buffer_size)
 {
     if (buffer_size <= 0)
     {
         return NULL;
     }
 
-    file_read_state *state = (file_read_state*) malloc(sizeof(file_read_state));
+    file_read_state *state = (file_read_state *)malloc(sizeof(file_read_state));
     state->fd = fd;
-    state->buf = (char*) malloc(buffer_size);
+    state->buf = (char *)malloc(buffer_size);
     state->max_size = buffer_size;
     state->size = 0;
     state->pos = 0;
@@ -73,13 +73,11 @@ static void read_next_chunk(file_read_state *state)
     int left = state->size - state->pos;
     if (left != 0)
     {
+        /* TODO: проверить запись чисел в результирующий файл */
         memcpy(state->buf, state->buf + state->pos, left);
-        state->pos = left;
     }
-    else
-    {
-        state->pos = 0;
-    }
+
+    state->pos = 0;
 
     /*
      * Заполняем оставшееся место в буфере (читаем оставшееся)

@@ -9,20 +9,21 @@
 /// @return Список указателей на названия файлов (из @ref argv)
 const char **extract_filenames(int argc, const char **argv, int *count);
 
-typedef struct temp_file_struct
-{
-    char *filename;
-    int fd;
-} temp_file_t;
+typedef struct temp_file_struct temp_file_t;
 
 /**
  * @brief Создать название временного файла, но не создавать пока
- * 
- * @return const char* Указатель на название временного файла. 
+ *
+ * @return const char* Указатель на название временного файла.
  * Место выделено, поэтому надо вызвать free
  */
-void temp_file_init(temp_file_t* temp_file);
-
+temp_file_t *temp_file_new();
+/**
+ * @brief Получить дескриптор для указанного временного файла
+ *
+ * @param temp_file
+ */
+int temp_file_fd(temp_file_t *temp_file);
 void temp_file_free(temp_file_t *temp_file);
 
 #endif

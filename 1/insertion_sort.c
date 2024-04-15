@@ -28,13 +28,38 @@ int insertion_sort_size(insertion_sort_state *state)
 
 static int do_bsearch(int *array, int left, int right, int target)
 {
-    int mid;
+    int mid = left + (right - left) / 2;
     while (left <= right)
     {
-        mid = (left + right) / 2;
+        if (left == right)
+        {
+            if (array[left] <= target)
+            {
+                return left + 1;
+            }
+
+            return left;
+        }
+
+        if (right - left == 1)
+        {
+            int lv = array[left];
+            int rv = array[right];
+            if (rv <= target)
+            {
+                return right + 1;
+            }
+            if (lv <= target)
+            {
+                return right;
+            }
+
+            return left;
+        }
+
         if (array[mid] == target)
         {
-            return mid;
+            return mid + 1;
         }
         else if (array[mid] < target)
         {
@@ -44,6 +69,7 @@ static int do_bsearch(int *array, int left, int right, int target)
         {
             right = mid - 1;
         }
+        mid = left + (right - left) / 2;
     }
 
     return mid;
@@ -51,12 +77,13 @@ static int do_bsearch(int *array, int left, int right, int target)
 
 static int perform_bsearch(insertion_sort_state *state, int target)
 {
-    return do_bsearch(state->array, 0, state->size, target);
+    return do_bsearch(state->array, 0, state->size - 1, target);
 }
 
 static void enlarge_array(insertion_sort_state *state)
 {
     assert(0 < state->capacity);
+
     int new_capacity = state->capacity * 2;
     state->array = realloc(state->array, new_capacity * sizeof(int));
     state->capacity = new_capacity;
@@ -64,8 +91,16 @@ static void enlarge_array(insertion_sort_state *state)
 
 static void insert_at_index(insertion_sort_state *state, int index, int number)
 {
+    // assert(index <= state->size);
+
+    if (state->size == index)
+    {
+        state->array[index] = number;
+        return;
+    }
+
     int *copy_start = state->array + index;
-    int copy_length = sizeof(int) * (state->size - index + 1);
+    int copy_length = sizeof(int) * (state->size - index);
     memmove(copy_start + 1, copy_start, copy_length);
     state->array[index] = number;
 }
@@ -89,6 +124,7 @@ void insertion_sort_insert(insertion_sort_state *state, int number)
 
     int index_to_insert = perform_bsearch(state, number);
     insert_at_index(state, index_to_insert, number);
+    ++state->size;
 }
 
 const int *insertion_sort_array(insertion_sort_state *state)
