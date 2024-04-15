@@ -108,7 +108,7 @@ static void heapify_down(priority_queue_t *pq)
              * Если есть только левый потомок, то проверяем только его и заканчиваем,
              * т.к. это означает конец кучи (массива)
              */
-            if (pq->heap[left].key < pq->heap[current_index].key)
+            if (pq->heap[current_index].key <= pq->heap[left].key)
             {
                 return;
             }
