@@ -71,10 +71,9 @@ static void read_next_chunk(file_read_state *state)
      * Переносим оставшиеся данные в начало буфера и размер
      */
     int left = state->size - state->pos;
-    if (left != 0)
+    if (0 < left)
     {
-        /* TODO: проверить запись чисел в результирующий файл */
-        memcpy(state->buf, state->buf + state->pos, left);
+        memmove(state->buf, state->buf + state->pos, left);
     }
 
     state->pos = 0;
@@ -84,11 +83,21 @@ static void read_next_chunk(file_read_state *state)
      */
     int to_read = state->max_size - left;
     assert(to_read + left <= state->max_size);
+
     int read_count = read(state->fd, state->buf + left, to_read);
     if (read_count == -1)
     {
         perror("read");
         exit(1);
+    }
+
+    if (read_count + left != state->max_size)
+    {
+        /* 
+         * После записанных символов могли остаться старые символы чисел.
+         * Из-за этого может сломаться парсинг, т.к. получится число не помещающееся в int (кастуем long к int получаем -1)
+         */
+        state->buf[read_count + left] = '\0';
     }
 
     if (read_count == 0)
@@ -150,7 +159,7 @@ bool file_read_state_get_next_number(file_read_state *state, int *read_number)
         int delta = 1;
         while (state->pos + delta < state->size)
         {
-            if (isspace(*(state->buf + delta)))
+            if (isspace(*(state->buf + state->pos + delta)))
             {
                 /* В условии сказано, что числа укладываются в int */
                 int number = (int)strtol(state->buf + state->pos,

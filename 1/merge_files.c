@@ -58,8 +58,10 @@ static void page_writer_flush(page_writer_t *writer)
 
 static void page_writer_write(page_writer_t *writer, int number)
 {
-    char buf[11 /* 10 (цифр в числе) + 1 (пробел) */];
-    int buf_size = snprintf(buf, 11, "%d ", number);
+    char buf[11 /* 10 (цифр в числе макс) + 1 (пробел) */];
+    int buf_size = snprintf(buf, 11, "%d", number);
+    buf[buf_size] = ' ';
+    ++buf_size;
     int chunk_left = writer->capacity - writer->size;
 
     if (buf_size <= chunk_left)
@@ -79,6 +81,7 @@ static void page_writer_write(page_writer_t *writer, int number)
     int to_write = writer->capacity - writer->size;
     memcpy(writer->chunk + writer->size, buf, to_write);
     page_writer_flush(writer);
+
     int left_buf_size = buf_size - to_write;
     memcpy(writer->chunk, buf + to_write, left_buf_size);
     writer->size = left_buf_size;
@@ -111,6 +114,8 @@ static void page_reader_delete(page_reader *reader)
     reader->chunk = NULL;
     reader->capacity = 0;
     reader->size = 0;
+    reader->pos = 0;
+    reader->eof = true;
 }
 
 #define IS_4_MULTIPLE(x) (((x) & 0b11) == 0)
@@ -133,7 +138,7 @@ static bool page_reader_try_read_next_chunk(page_reader *reader)
         }
 
         size += current_read;
-    } while (!IS_4_MULTIPLE(size));
+    } while (!IS_4_MULTIPLE(size) && reader->capacity < size);
 
     if (size == 0)
     {
@@ -223,7 +228,7 @@ void merge_files(int result_fd, int *fds, int count)
 {
     merge_state state;
     merge_state_init(&state, fds, count);
-    
+
     page_writer_t writer;
     page_writer_init(&writer, result_fd, 4096);
 
