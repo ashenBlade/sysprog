@@ -7,7 +7,7 @@ include_directories(.)
 
 add_executable(${PROJECT_NAME})
 
-set(CORO_SOURCES 
+set(CORO_SOURCES
     external_sort.c
     libcoro.c
     solution.c
@@ -26,14 +26,15 @@ if(LEAK_CHECK)
     list(APPEND CORO_COMPILE_FLAGS -ldl -rdynamic)
 endif(LEAK_CHECK)
 
+if(NO_CORO) 
+target_compile_definitions(${PROJECT_NAME}
+    PRIVATE NO_CORO)
+endif(NO_CORO)  
 
 target_sources(${PROJECT_NAME} PRIVATE ${CORO_SOURCES})
 
-target_include_directories(${PROJECT_NAME} 
+target_include_directories(${PROJECT_NAME}
     PRIVATE include)
 
-target_compile_definitions(${PROJECT_NAME} 
-    PRIVATE NO_CORO)
-
-target_compile_options(${PROJECT_NAME} 
+target_compile_options(${PROJECT_NAME}
     PRIVATE ${CORO_COMPILE_FLAGS})
