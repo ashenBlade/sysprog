@@ -6,11 +6,13 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <time.h>
 
 #include "libcoro.h"
 #include "utils.h"
 #include "external_sort.h"
 #include "merge_files.h"
+#include "timespec_helpers.h"
 
 /**
  * You can compile and run this code using the commands:
@@ -78,7 +80,7 @@ sort_external_coro(void *context)
     return 0;
 }
 
-void global_init(int argc, const char **argv)
+static void global_init(int argc, const char **argv)
 {
     (void)argc;
     (void)argv;
@@ -86,11 +88,19 @@ void global_init(int argc, const char **argv)
     coro_sched_init();
 }
 
-void display_coro_stats(struct coro* c)
+static void display_coro_stats(struct coro* c)
 {
     coro_stats_t stats;
     coro_stats(c, &stats);
     printf("Корутина завершилась:\n\tВремя работы: %lld с, %lld нс\n\tПереключений контекста: %lld\n", (long long)stats.worktime.tv_sec, (long long)stats.worktime.tv_nsec, stats.switch_count);
+}
+
+static void 
+display_work_time(struct timespec *start, struct timespec *end)
+{
+    struct timespec diff;
+    timespec_sub(end, start, &diff);
+    printf("Время работы: %lld с, %lld нс\n", (long long)diff.tv_sec, (long long)diff.tv_nsec);
 }
 
 int main(int argc, const char **argv)
@@ -111,6 +121,9 @@ int main(int argc, const char **argv)
         sort_context_init(cur_ctx, i, filenames[i]);
         coro_new(sort_external_coro, cur_ctx);
     }
+
+    struct timespec start_time;
+    clock_gettime(CLOCK_REALTIME, &start_time);
 
     /*
      * Запускаем корутины и ждем их завершения
@@ -148,8 +161,11 @@ int main(int argc, const char **argv)
 
     merge_files(result_fd, fds, files_count);
 
+    struct timespec end_time;
+    clock_gettime(CLOCK_REALTIME, &end_time);
+    display_work_time(&start_time, &end_time);
+    
     close(result_fd);
-
     for (long i = 0; i < files_count; i++)
     {
         sort_context_free(&contexts[i]);

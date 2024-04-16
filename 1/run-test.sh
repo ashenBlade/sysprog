@@ -54,7 +54,7 @@ fi
 
 TEST_FILES=""
 
-for NUM in $(seq 1 $1); dog
+for NUM in $(seq 1 $1); do
     FILENAME="$TEST_DIR/numbers$NUM.txt"
     echo "Создаю файл $FILENAME"
     python3 ./generator.py -f "$FILENAME" -c 300000
@@ -80,3 +80,9 @@ if [[ "$?" -ne 0 ]]; then
 fi
 
 echo "Проверка завершилась успешно"
+echo 'Удаляю сгенерированные файлы'
+
+# Файлы с неотсортированными числами
+rm -rf 'test'
+# Файл с результатом сортировки
+rm result.txt

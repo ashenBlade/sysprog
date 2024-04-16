@@ -15,7 +15,8 @@ set(CORO_SOURCES
     priority_queue.c
     merge_files.c
     number_file_reader.c
-    insertion_sort.c)
+    insertion_sort.c
+    timespec_helpers.c)
 
 set(CORO_COMPILE_FLAGS
     -Wextra -Werror -Wall -g3 -ggdb -Wno-gnu-folding-constant)
