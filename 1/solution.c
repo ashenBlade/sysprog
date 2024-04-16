@@ -35,7 +35,7 @@ typedef struct sort_context
     /**
      * @brief Временный файл, в который необходимо сохранять отсортированные значения
      */
-    temp_file_t* temp_file;
+    temp_file_t *temp_file;
 } sort_context;
 
 static void
@@ -44,7 +44,7 @@ sort_context_init(struct sort_context *ctx, int id, const char *filename)
     int fd = open(filename, O_RDONLY);
     if (fd == -1)
     {
-        
+
         perror("open");
         exit(1);
     }
@@ -147,6 +147,8 @@ int main(int argc, const char **argv)
     {
         sort_context_free(&contexts[i]);
     }
+    free(fds);
     free(contexts);
+    free(filenames);
     return 0;
 }

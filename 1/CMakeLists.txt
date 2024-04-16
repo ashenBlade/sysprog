@@ -7,7 +7,7 @@ include_directories(.)
 
 add_executable(${PROJECT_NAME})
 
-target_sources(${PROJECT_NAME} PRIVATE
+set(CORO_SOURCES 
     external_sort.c
     libcoro.c
     solution.c
@@ -17,6 +17,18 @@ target_sources(${PROJECT_NAME} PRIVATE
     number_file_reader.c
     insertion_sort.c)
 
+set(CORO_COMPILE_FLAGS
+    -Wextra -Werror -Wall -g3 -ggdb -Wno-gnu-folding-constant)
+
+if(LEAK_CHECK)
+    message("Обнаружена переменная LEAK_CHECK - добавляю проверку утечек")
+    list(APPEND CORO_SOURCES ../utils/heap_help/heap_help.c)
+    list(APPEND CORO_COMPILE_FLAGS -ldl -rdynamic)
+endif(LEAK_CHECK)
+
+
+target_sources(${PROJECT_NAME} PRIVATE ${CORO_SOURCES})
+
 target_include_directories(${PROJECT_NAME} 
     PRIVATE .)
 
@@ -24,4 +36,4 @@ target_compile_definitions(${PROJECT_NAME}
     PRIVATE NO_CORO)
 
 target_compile_options(${PROJECT_NAME} 
-    PRIVATE -Wextra -Werror -Wall -g3 -ggdb -Wno-gnu-folding-constant)
+    PRIVATE ${CORO_COMPILE_FLAGS})

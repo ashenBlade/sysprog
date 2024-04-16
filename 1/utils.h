@@ -6,6 +6,7 @@
 /// @param argc Количество аргументов командной строки
 /// @param argv Аргументы командной строки
 /// @param count Длина полученного списка
+/// @remarks В результате выделяется массив, который необходимо освободить 
 /// @return Список указателей на названия файлов (из @ref argv)
 const char **extract_filenames(int argc, const char **argv, int *count);
 
