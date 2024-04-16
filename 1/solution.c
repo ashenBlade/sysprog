@@ -86,6 +86,13 @@ void global_init(int argc, const char **argv)
     coro_sched_init();
 }
 
+void display_coro_stats(struct coro* c)
+{
+    coro_stats_t stats;
+    coro_stats(c, &stats);
+    printf("Корутина завершилась:\n\tВремя работы: %lld с, %lld нс\n\tПереключений контекста: %lld\n", (long long)stats.worktime.tv_sec, (long long)stats.worktime.tv_nsec, stats.switch_count);
+}
+
 int main(int argc, const char **argv)
 {
     global_init(argc, argv);
@@ -111,7 +118,7 @@ int main(int argc, const char **argv)
     struct coro *c;
     while ((c = coro_sched_wait()) != NULL)
     {
-        printf("Finished %d\n", coro_status(c));
+        display_coro_stats(c);
         coro_delete(c);
     }
 

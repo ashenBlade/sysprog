@@ -29,7 +29,7 @@ static void read_and_sort_coro(int src_fd, insertion_sort_state *is, int max_mem
     file_read_state_delete(read_state);
 }
 
-static void save_to_temp_file(insertion_sort_state *is, int fd)
+static void save_to_temp_file_coro(insertion_sort_state *is, int fd)
 {
     char *buffer = (char*) insertion_sort_array(is);
     int array_size = insertion_sort_size(is);
@@ -70,7 +70,7 @@ void sort_file_external_coro(int src_fd, int temp_fd)
     read_and_sort_coro(src_fd, &sorted_state, get_chunk_read_size());
     
     /* После сохраняем готовый сортированный массив в результирующий файл */
-    save_to_temp_file(&sorted_state, temp_fd);
+    save_to_temp_file_coro(&sorted_state, temp_fd);
 
     insertion_sort_free(&sorted_state);
 }

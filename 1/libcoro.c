@@ -5,6 +5,8 @@
 #include <signal.h>
 #include <errno.h>
 #include <string.h>
+#include <time.h>
+
 #include "libcoro.h"
 
 #define handle_error() ({printf("Error %s\n", strerror(errno)); exit(-1);})
@@ -23,6 +25,7 @@ struct coro {
 	sigjmp_buf ctx;
 	/** True, if the coroutine has finished. */
 	bool is_finished;
+    /** Количество переключений контекста */
 	long long switch_count;
 	/** Links in the coroutine list, used by scheduler. */
 	struct coro *next, *prev;
@@ -112,12 +115,22 @@ coro_yield_to(struct coro *to)
 void
 coro_yield(void)
 {
-	struct coro *from = coro_this_ptr;
-	struct coro *to = from->next;
+    struct coro *from = coro_this_ptr;
+    struct coro *to = from->next;
 	if (to == NULL)
 		coro_yield_to(&coro_sched);
 	else
 		coro_yield_to(to);
+}
+
+void coro_stats(struct coro *c, coro_stats_t *stats)
+{
+    stats->switch_count = c->switch_count;
+    // TODO: замер времени
+    stats->worktime = (struct timespec){
+        .tv_sec = 0,
+        .tv_nsec = 0,
+    };
 }
 
 void

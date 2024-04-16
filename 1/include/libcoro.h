@@ -51,3 +51,22 @@ coro_yield(void);
 #else
 #define yield() coro_yield()
 #endif /* NO_CORO */
+
+
+typedef struct coro_stats
+{
+    /**
+     * @brief Количество переключений контекста
+     * 
+     */
+    long long switch_count;
+
+    /**
+     * @brief Суммарное время работы корутины
+     */
+    struct timespec worktime;
+} coro_stats_t;
+
+/** Получить статистику работы этой корутины */
+void 
+coro_stats(struct coro *c, coro_stats_t *stats);
