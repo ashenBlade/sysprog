@@ -30,7 +30,7 @@ endif(LEAK_CHECK)
 target_sources(${PROJECT_NAME} PRIVATE ${CORO_SOURCES})
 
 target_include_directories(${PROJECT_NAME} 
-    PRIVATE .)
+    PRIVATE include)
 
 target_compile_definitions(${PROJECT_NAME} 
     PRIVATE NO_CORO)
