@@ -80,6 +80,7 @@ static void page_writer_write(page_writer_t *writer, int number)
 
     int to_write = writer->capacity - writer->size;
     memcpy(writer->chunk + writer->size, buf, to_write);
+    writer->size += to_write;
     page_writer_flush(writer);
 
     int left_buf_size = buf_size - to_write;
