@@ -17,6 +17,11 @@ target_sources(${PROJECT_NAME} PRIVATE
     number_file_reader.c
     insertion_sort.c)
 
-target_include_directories(${PROJECT_NAME} PRIVATE .)
+target_include_directories(${PROJECT_NAME} 
+    PRIVATE .)
 
-target_compile_options(${PROJECT_NAME} PRIVATE -Wextra -Werror -Wall -g3 -ggdb -Wno-gnu-folding-constant -I. -DNO_CORO)
+target_compile_definitions(${PROJECT_NAME} 
+    PRIVATE NO_CORO)
+
+target_compile_options(${PROJECT_NAME} 
+    PRIVATE -Wextra -Werror -Wall -g3 -ggdb -Wno-gnu-folding-constant)
