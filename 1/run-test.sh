@@ -54,10 +54,10 @@ fi
 
 TEST_FILES=""
 
-for NUM in $(seq 1 $1); do
+for NUM in $(seq 1 $1); dog
     FILENAME="$TEST_DIR/numbers$NUM.txt"
     echo "Создаю файл $FILENAME"
-    python3 ./generator.py -f "$FILENAME" -c 100000
+    python3 ./generator.py -f "$FILENAME" -c 300000
     if [[ "$?" -ne 0 ]]; then
         echo "Ошибка при генерации файла"
         exit 1
