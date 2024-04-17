@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <string.h>
 #include <time.h>
+#include <assert.h>
 
 #include "libcoro.h"
 #include "timespec_helpers.h"
@@ -29,12 +30,16 @@ struct coro
     bool is_finished;
     /** Количество переключений контекста */
     long long switch_count;
+    /** Сколько раз переключение не выполнилось, т.к. квант времени не был превышен */
+    long long false_switch_count;
     /** Общее время работы корутины*/
-    struct timespec total_worktime;
+    struct timespec total_work_time;
     /** Запущена ли корутина сейчас */
     bool is_running;
     /** Время запуска корутины */
     struct timespec start_time;
+    /** Минимальный квант времени работы этой корутины */
+    struct timespec quantum;
     /** Links in the coroutine list, used by scheduler. */
     struct coro *next, *prev;
 };
@@ -106,6 +111,15 @@ void coro_delete(struct coro *c)
     free(c);
 }
 
+static void
+coro_current_work_time(struct coro *c, struct timespec *work_time)
+{
+    assert(c->is_running);
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    timespec_sub(&now, &c->start_time, work_time);
+}
+
 /** Switch the current coroutine to an arbitrary one. */
 static void
 coro_yield_to(struct coro *to)
@@ -113,15 +127,15 @@ coro_yield_to(struct coro *to)
     struct coro *from = coro_this_ptr;
     ++from->switch_count;
 
-    if (from->is_running /* Проверка на первый запуск */)
+    if (from->is_running)
     {
+        struct timespec current_work_time;
+        struct timespec new_work_time;
+        coro_current_work_time(from, &current_work_time);
+        timespec_add(&from->total_work_time, &current_work_time, &new_work_time);
+        from->total_work_time = new_work_time;
+        memset(&to->start_time, 0, sizeof(struct timespec));
         from->is_running = false;
-        struct timespec current_worktime;
-        struct timespec now;
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        timespec_sub(&now, &from->start_time, &current_worktime);
-        timespec_add(&from->total_worktime, &current_worktime, &now);
-        from->total_worktime = now;
     }
 
     if (sigsetjmp(from->ctx, 0) == 0)
@@ -135,54 +149,69 @@ coro_yield_to(struct coro *to)
     coro_this_ptr = from;
 }
 
+/** Проверить, что указанная корутина превысила свой квантум времени */
+static bool
+coro_quantum_passes(struct coro *c)
+{
+    assert(c->is_running);
+    struct timespec current_work_time;
+    coro_current_work_time(c, &current_work_time);
+    return timespec_le(&c->quantum, &current_work_time);
+}
+
 void coro_yield(void)
 {
     struct coro *from = coro_this_ptr;
     struct coro *to = from->next;
-    if (to == NULL)
-        coro_yield_to(&coro_sched);
+
+    if (coro_quantum_passes(from))
+    {
+        if (to == NULL)
+        {
+            coro_yield_to(&coro_sched);
+        }
+        else
+        {
+            coro_yield_to(to);
+        }
+    }
     else
-        coro_yield_to(to);
+    {
+        ++from->false_switch_count;
+    }
 }
 
-
-static void coro_worktime(struct coro *c, struct timespec *worktime)
+static void coro_total_work_time(struct coro *c, struct timespec *work_time)
 {
-    *worktime = c->total_worktime;
+    *work_time = c->total_work_time;
     if (c->is_finished || !c->is_running)
     {
-        /*
-         * Если корутина завершила работу, либо сейчас не запущена,
-         * то ее общее время работы должно быть подсчитано
-         * */
         return;
     }
 
-    /*
-     * В противном случае, необходимо получить текущее время и сложить его с уже работающим временем */
-    struct timespec current_worktime;
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-
-    timespec_sub(&now, &c->start_time, &current_worktime);
-    timespec_add(&c->total_worktime, &current_worktime, worktime);
+    struct timespec current_work_time;
+    coro_current_work_time(c, &current_work_time);
+    timespec_add(&c->total_work_time, &current_work_time, work_time);
 }
 
 void coro_stats(struct coro *c, coro_stats_t *stats)
 {
     stats->switch_count = c->switch_count;
-    coro_worktime(c, &stats->worktime);
+    stats->false_switch_count = c->false_switch_count;
+    coro_total_work_time(c, &stats->worktime);
 }
 
-void coro_sched_init(void)
+void coro_sched_init(struct timespec *quantum)
 {
     memset(&coro_sched, 0, sizeof(coro_sched));
+    coro_sched.quantum = *quantum;
     coro_this_ptr = &coro_sched;
 }
 
 struct coro *
 coro_sched_wait(void)
 {
+    // coro_sched.is_running = true;
     while (coro_list != NULL)
     {
         for (struct coro *c = coro_list; c != NULL; c = c->next)
@@ -229,8 +258,14 @@ coro_body(int signum)
      * finaly start work.
      */
     coro_this_ptr = c;
+    c->is_running = true;
+    c->quantum = coro_sched.quantum;
+    clock_gettime(CLOCK_MONOTONIC, &c->start_time);
+
     c->ret = c->func(c->func_arg);
+
     c->is_finished = true;
+    c->is_running = false;
     /* Can not return - 'ret' address is invalid already! */
     if (!is_sched_waiting)
     {

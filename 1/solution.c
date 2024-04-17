@@ -80,45 +80,47 @@ sort_external_coro(void *context)
     return 0;
 }
 
-static void global_init(int argc, const char **argv)
+static void 
+init_coro(prog_args_t *args)
 {
-    (void)argc;
-    (void)argv;
-
-    coro_sched_init();
+    struct timespec latency;
+    us_to_timespec(args->latency_us, &latency);
+    struct timespec coro_lat;
+    timespec_div(&latency, args->files_count, &coro_lat);
+    fprintf(stderr, "Рассчитанная задержка корутин: %lld с, %lld нс\n", (long long)coro_lat.tv_sec, (long long)coro_lat.tv_nsec);
+    coro_sched_init(&coro_lat);
 }
 
-static void display_coro_stats(struct coro* c)
+static void display_coro_stats(struct coro *c)
 {
     coro_stats_t stats;
     coro_stats(c, &stats);
-    printf("Корутина завершилась:\n\tВремя работы: %lld с, %lld нс\n\tПереключений контекста: %lld\n", (long long)stats.worktime.tv_sec, (long long)stats.worktime.tv_nsec, stats.switch_count);
+    printf("Корутина завершилась:\n\tВремя работы: %lld с, %lld нс\n\tПереключений контекста: %lld\n\tЛожных переключений контекста: %lld\n", (long long)stats.worktime.tv_sec, (long long)stats.worktime.tv_nsec, (long long) stats.switch_count, (long long) stats.false_switch_count);
 }
 
-static void 
+static void
 display_work_time(struct timespec *start, struct timespec *end)
 {
     struct timespec diff;
     timespec_sub(end, start, &diff);
-    printf("Время работы: %lld с, %lld нс\n", (long long)diff.tv_sec, (long long)diff.tv_nsec);
+    printf("Общее время работы: %lld с, %lld нс\n", (long long)diff.tv_sec, (long long)diff.tv_nsec);
 }
 
 int main(int argc, const char **argv)
 {
-    global_init(argc, argv);
-    int files_count;
-    const char **filenames = extract_filenames(argc, argv, &files_count);
-    assert(filenames != NULL);
+    prog_args_t args;
+    extract_program_args(argc, argv, &args);
+    init_coro(&args);
 
     /*
      * Запускаем корутины для каждого файла в списке
      */
-    sort_context *contexts = (sort_context *)malloc(sizeof(sort_context) * files_count);
-    for (long i = 0; i < files_count; i++)
+    sort_context *contexts = (sort_context *)malloc(sizeof(sort_context) * args.files_count);
+    for (long i = 0; i < args.files_count; i++)
     {
         /* code */
         sort_context *cur_ctx = &contexts[i];
-        sort_context_init(cur_ctx, i, filenames[i]);
+        sort_context_init(cur_ctx, i, args.filenames[i]);
         coro_new(sort_external_coro, cur_ctx);
     }
 
@@ -137,8 +139,8 @@ int main(int argc, const char **argv)
 
     /* Все корутины завершились - запускаем мерж всех файлов */
 
-    int *fds = (int *)malloc(sizeof(int) * files_count);
-    for (long i = 0; i < files_count; i++)
+    int *fds = (int *)malloc(sizeof(int) * args.files_count);
+    for (long i = 0; i < args.files_count; i++)
     {
         int temp_fd = temp_file_fd(contexts[i].temp_file);
         if (lseek(temp_fd, 0, SEEK_SET) == -1)
@@ -159,19 +161,19 @@ int main(int argc, const char **argv)
         exit(1);
     }
 
-    merge_files(result_fd, fds, files_count);
+    merge_files(result_fd, fds, args.files_count);
 
     struct timespec end_time;
     clock_gettime(CLOCK_REALTIME, &end_time);
     display_work_time(&start_time, &end_time);
-    
+
     close(result_fd);
-    for (long i = 0; i < files_count; i++)
+    for (long i = 0; i < args.files_count; i++)
     {
         sort_context_free(&contexts[i]);
     }
     free(fds);
     free(contexts);
-    free(filenames);
+    free(args.filenames);
     return 0;
 }

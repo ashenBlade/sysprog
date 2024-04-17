@@ -1,14 +1,24 @@
 #ifndef UTILS_H
 #define UTILS_H
 
+typedef struct program_args
+{
+    /** Названия файлов, которые необходимо обработать */
+    const char **filenames;
+    /** Количество этих файлов в массиве */
+    int files_count;
+    /** Указанная задержка, либо 0, если не указана */
+    long long latency_us;
+} prog_args_t;
+
 /// @brief Получить все имена файлов, которые необходимо отсортировать.
 /// Дополнительно, этот метод проверяет и возможность работы с файлами (права доступа, файл или директория)
 /// @param argc Количество аргументов командной строки
 /// @param argv Аргументы командной строки
-/// @param count Длина полученного списка
-/// @remarks В результате выделяется массив, который необходимо освободить 
-/// @return Список указателей на названия файлов (из @ref argv)
-const char **extract_filenames(int argc, const char **argv, int *count);
+/// @param prog_args Полученные параметры
+/// @remarks В результате выделяется массив, который необходимо освободить
+void 
+extract_program_args(int argc, const char **argv, prog_args_t *prog_args);
 
 typedef struct temp_file_struct temp_file_t;
 
@@ -19,6 +29,7 @@ typedef struct temp_file_struct temp_file_t;
  * Место выделено, поэтому надо вызвать free
  */
 temp_file_t *temp_file_new();
+
 /**
  * @brief Получить дескриптор для указанного временного файла
  *

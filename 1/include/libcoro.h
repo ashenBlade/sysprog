@@ -5,9 +5,9 @@
 struct coro;
 typedef int (*coro_f)(void *);
 
-/** Make current context scheduler. */
+/** Make current context scheduler with minimum work time quantum */
 void
-coro_sched_init(void);
+coro_sched_init(struct timespec *quantum);
 
 /**
  * Block until any coroutine has finished. It is returned. NULl,
@@ -60,6 +60,12 @@ typedef struct coro_stats
      * 
      */
     long long switch_count;
+
+    /**
+     * @brief Количество вызовов переключения контекста, когда она не произошла.
+     * Например, из-за того, что квант времени не был превышен.
+     */
+    long long false_switch_count;
 
     /**
      * @brief Суммарное время работы корутины
