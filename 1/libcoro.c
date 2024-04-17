@@ -126,17 +126,14 @@ coro_yield_to(struct coro *to)
 {
     struct coro *from = coro_this_ptr;
     ++from->switch_count;
-
-    if (from->is_running)
-    {
-        struct timespec current_work_time;
-        struct timespec new_work_time;
-        coro_current_work_time(from, &current_work_time);
-        timespec_add(&from->total_work_time, &current_work_time, &new_work_time);
-        from->total_work_time = new_work_time;
-        memset(&to->start_time, 0, sizeof(struct timespec));
-        from->is_running = false;
-    }
+    
+    struct timespec current_work_time;
+    struct timespec new_work_time;
+    coro_current_work_time(from, &current_work_time);
+    timespec_add(&from->total_work_time, &current_work_time, &new_work_time);
+    from->total_work_time = new_work_time;
+    memset(&to->start_time, 0, sizeof(struct timespec));
+    from->is_running = false;
 
     if (sigsetjmp(from->ctx, 0) == 0)
     {
@@ -204,8 +201,13 @@ void coro_stats(struct coro *c, coro_stats_t *stats)
 void coro_sched_init(struct timespec *quantum)
 {
     memset(&coro_sched, 0, sizeof(coro_sched));
-    coro_sched.quantum = *quantum;
     coro_this_ptr = &coro_sched;
+
+    /* 
+     * Для корректного отслеживания времени работы
+     */
+    coro_sched.quantum = *quantum;
+    coro_sched.is_running = true;
 }
 
 struct coro *
@@ -283,7 +285,7 @@ coro_new(coro_f func, void *func_arg)
     int stack_size = 1024 * 1024;
     if (stack_size < SIGSTKSZ)
         stack_size = SIGSTKSZ;
-        
+
     c->stack = malloc(stack_size);
     c->func = func;
     c->func_arg = func_arg;
