@@ -16,7 +16,8 @@ set(CORO_SOURCES
     merge_files.c
     number_file_reader.c
     insertion_sort.c
-    timespec_helpers.c)
+    timespec_helpers.c
+    stack.c)
 
 set(CORO_COMPILE_FLAGS
     -Wextra -Werror -Wall -g3 -ggdb -Wno-gnu-folding-constant)
@@ -28,8 +29,9 @@ if(LEAK_CHECK)
 endif(LEAK_CHECK)
 
 if(NO_CORO) 
-target_compile_definitions(${PROJECT_NAME}
-    PRIVATE NO_CORO)
+    message("Обнаружена переменная NO_CORO - удаляю использование yield()")
+    target_compile_definitions(${PROJECT_NAME}
+        PRIVATE NO_CORO)
 endif(NO_CORO)  
 
 target_sources(${PROJECT_NAME} PRIVATE ${CORO_SOURCES})

@@ -283,6 +283,7 @@ coro_new(coro_f func, void *func_arg)
     int stack_size = 1024 * 1024;
     if (stack_size < SIGSTKSZ)
         stack_size = SIGSTKSZ;
+        
     c->stack = malloc(stack_size);
     c->func = func;
     c->func_arg = func_arg;

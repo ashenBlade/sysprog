@@ -9,6 +9,8 @@ typedef struct program_args
     int files_count;
     /** Указанная задержка, либо 0, если не указана */
     long long latency_us;
+    /** Количество корутин в пуле, которое нужно использовать */
+    int coro_count;
 } prog_args_t;
 
 /// @brief Получить все имена файлов, которые необходимо отсортировать.

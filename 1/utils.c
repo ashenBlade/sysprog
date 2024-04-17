@@ -29,7 +29,7 @@ void extract_program_args(int argc, const char **argv, prog_args_t *args)
     long long latency = DEFAULT_LATENCY;
     if (strcmp(argv[1], "-l") == 0 || strcmp(argv[1], "--latency") == 0)
     {
-        if (argc == 3)
+        if (argc <= 3)
         {
             /** Указана только задержка - без файлов */
             print_usage(argv);
@@ -50,6 +50,31 @@ void extract_program_args(int argc, const char **argv, prog_args_t *args)
         }
 
         i = 3;
+    }
+
+    int coro_count = -1;
+    if (strcmp(argv[3], "-c") == 0 || strcmp(argv[3], "--latency") == 0)
+    {
+        if (argc <= 5)
+        {
+            print_usage(argv);
+            exit(1);
+        }
+
+        coro_count = (int)strtol(argv[4], NULL, 10);
+        if (coro_count == 0)
+        {
+            printf("Количество корутин должно быть положительным. Передано 0\n");
+            exit(1);
+        }
+
+        if (coro_count < 0)
+        {
+            printf("Количество корутин должно быть положительным. Передано %d\n", coro_count);
+            exit(1);
+        }
+
+        i = 5;
     }
 
     int files_count = argc - i;
@@ -75,11 +100,16 @@ void extract_program_args(int argc, const char **argv, prog_args_t *args)
     args->filenames = filenames;
     args->files_count = files_count;
     args->latency_us = latency;
+    args->coro_count = coro_count == -1
+                           ? files_count
+                           : coro_count;
 }
 
 void print_usage(const char **argv)
 {
-    printf("Использование: %s [-l|--latency LATENCY] <file1> <file2> ...\n\t-l|--latency LATENCY - указать задержку в мкс. Если не указано, будет выставлено в 100000 (100мс)", argv[0]);
+    printf("Использование: %s [-l|--latency LATENCY] [-c|--coro-count CORO_COUNT] <file1> <file2> ...\n", argv[0]);
+    printf("\t-l|--latency LATENCY - указать задержку в мкс. Если не указано, будет выставлено в 100000 (100мс)\n");
+    printf("\t-c|--coro-count CORO_COUNT - указать количество корутин, которое нужно использовать. Если не указано - равняется количеству переданных файлов\n");
 }
 
 #define TEMP_FILE_MASK "/tmp/coro-sort-XXXXXX\0"
