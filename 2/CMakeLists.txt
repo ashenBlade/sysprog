@@ -6,7 +6,8 @@ set(PROJECT_SOURCES
     solution.c
     parser.c
     exec_command.c
-    parse_command.c)
+    parse_command.c
+    builtin_command.c)
 
 add_executable(${PROJECT_NAME})
 
