@@ -65,7 +65,7 @@ void exec_command(command_t *cmd)
         return;
     }
 
-    if (exec_builtin_command(cmd->first.first.name, cmd->first.first.args, cmd->first.first.args_count) == 0)
+    if (exec_builtin_command(cmd->first.last.name, cmd->first.last.args, cmd->first.last.args_count) == 0)
     {
         /* Выполнена встроенная команда */
         return;
@@ -74,7 +74,7 @@ void exec_command(command_t *cmd)
     int child_pid;
     if ((child_pid = fork()) == 0)
     {
-        char **argv = build_execvp_argv(&cmd->first.first);
+        char **argv = build_execvp_argv(&cmd->first.last);
         exit(execvp(argv[0], argv));
         return;
     }

@@ -78,24 +78,21 @@ typedef struct pipeline_build_state
      * Для первого пайплайна опускается, т.к. запуск без условия
      */
     bool and;
-    /** Первая команда в пайплайне */
-    exe_state_t first;
-    /** Все последующие команды в пайплайне */
-    exe_state_t *other;
+    /** Команды, участвующие в пайплайне */
+    exe_state_t *exes;
     /** Длина массива other */
-    int other_count;
-    /** Вместимость массива other (Capacity) */
-    int other_cap;
+    int size;
+    /** Вместимость массива exes (Capacity) */
+    int capacity;
 } pipeline_state_t;
 
 static void
 pipeline_state_init(pipeline_state_t *state)
 {
     state->and = false;
-    state->other = NULL;
-    state->other_cap = 0;
-    state->other_count = 0;
-    exe_state_init(&state->first);
+    state->exes = NULL;
+    state->capacity = 0;
+    state->size = 0;
 }
 
 static void
@@ -103,98 +100,87 @@ pipeline_state_add_command(pipeline_state_t *state, struct expr *e, bool is_and)
 {
     ASSERT_IS_COMMAND(e);
 
-    /* Если пайплайн был пуст, то добавляем первую команду */
-    if (!exe_state_is_init(&state->first))
-    {
-        exe_state_update(&state->first, &e->cmd);
-        state->and = is_and;
-        return;
-    }
-
     /* Проверяем место для массива state->other */
-    int insert_index = state->other_count;
-    if (state->other == NULL)
+    int insert_index = state->size;
+    if (state->exes == NULL)
     {
-        state->other = (exe_state_t *)malloc(sizeof(exe_state_t) * 1);
-        state->other_cap = 1;
+        state->exes = (exe_state_t *)malloc(sizeof(exe_state_t) * 1);
+        state->capacity = 1;
     }
-    else if (state->other_cap == state->other_count)
+    else if (state->capacity == state->size)
     {
-        int new_cap = state->other_cap * 2;
-        state->other = (exe_state_t *)realloc(state->other, new_cap);
-        state->other_cap = new_cap;
+        state->exes = (exe_state_t *)realloc(state->exes, state->capacity * 2);
+        state->capacity *= 2;
     }
 
     /* Добавляем новый exe в наш массив */
-    exe_state_init(state->other + insert_index);
-    exe_state_update(state->other + insert_index, &e->cmd);
+    exe_state_init(state->exes + insert_index);
+    exe_state_update(state->exes + insert_index, &e->cmd);
     state->and = is_and;
-}
-
-static bool
-pipeline_state_is_init(pipeline_state_t *state)
-{
-    return exe_state_is_init(&state->first);
+    ++state->size;
 }
 
 static void
 pipeline_state_build_cond(pipeline_state_t *state, pipeline_condition_t *pc)
 {
-    pc->is_and = state->and;
-    exe_state_build(&state->first, &pc->pipeline.first);
+    assert(0 < state->size);
+    assert(state->exes != NULL);
 
-    if (state->other_count == 0)
+    pc->is_and = state->and;
+
+    exe_state_build(state->exes + (state->size - 1), &pc->pipeline.last);
+
+    if (state->size == 1)
     {
         pc->pipeline.piped = NULL;
         pc->pipeline.piped_count = 0;
         return;
     }
 
-    exe_t *piped = (exe_t *)malloc(sizeof(exe_t) * state->other_count);
-    for (size_t i = 0; i < state->other_count; i++)
+    exe_t *piped = (exe_t *)malloc(sizeof(exe_t) * state->size);
+    for (size_t i = 0; i < state->size - 1; i++)
     {
-        exe_state_build(state->other + i, piped + i);
+        exe_state_build(state->exes + i, piped + i);
     }
     pc->pipeline.piped = piped;
-    pc->pipeline.piped_count = state->other_count;
+    pc->pipeline.piped_count = state->size;
 }
 
 static void
 pipeline_state_build_no_cond(pipeline_state_t *state, pipeline_t *p)
 {
-    exe_state_build(&state->first, &p->first);
+    exe_state_build(state->exes + (state->size - 1), &p->last);
 
-    if (state->other_count == 0)
+    if (state->size == 1)
     {
         p->piped = NULL;
         p->piped_count = 0;
         return;
     }
 
-    exe_t *piped = (exe_t *)malloc(sizeof(exe_t) * state->other_count);
-    for (size_t i = 0; i < state->other_count; i++)
+    exe_t *piped = (exe_t *)malloc(sizeof(exe_t) * state->size);
+    for (size_t i = 0; i < state->size - 1; i++)
     {
-        exe_state_build(state->other + i, piped + i);
+        exe_state_build(state->exes + i, piped + i);
     }
     p->piped = piped;
-    p->piped_count = state->other_count;
+    p->piped_count = state->size;
 }
 
 static void
 pipeline_state_free(pipeline_state_t *ps)
 {
     ps->and = false;
-    exe_state_free(&ps->first);
-    if (ps->other != NULL)
+    if (ps->exes != NULL)
     {
-        for (size_t i = 0; i < ps->other_count; i++)
+        for (size_t i = 0; i < ps->size; i++)
         {
-            exe_state_free(ps->other + i);
+            exe_state_free(ps->exes + i);
         }
-        free(ps->other);
-        ps->other = NULL;
-        ps->other_cap = 0;
-        ps->other_count = 0;
+        free(ps->exes);
+        ps->exes = NULL;
+        ps->capacity = 0;
+        ps->size = 0;
     }
 }
 
@@ -249,9 +235,9 @@ build_state_free(build_state_t *bs)
         for (size_t i = 0; i < bs->pipelines_count; i++)
         {
             pipeline_state_t *s = bs->pipelines + i;
-            if (s->other != NULL)
+            if (s->exes != NULL)
             {
-                /* code */
+                /* TODO: освобождение ресурсов */
             }
         }
 
@@ -260,18 +246,13 @@ build_state_free(build_state_t *bs)
         free(bs->pipelines);
         bs->pipelines = NULL;
     }
-
-    if (pipeline_state_is_init(&bs->first))
-    {
-        pipeline_state_free(&bs->first);
-    }
 }
 
 static void
 build_state_add_cond_expr(build_state_t *state, struct expr *e, bool is_and)
 {
     ASSERT_IS_COMMAND(e);
-    assert(pipeline_state_is_init(&state->first));
+    /* assert(pipeline_state_is_init()); */
 
     /*
      * Это фукнция для добавления exe к уже существующему пайплайну - новых создавать не нужно
@@ -417,7 +398,7 @@ exe_free(exe_t *e)
 static void
 pipeline_free(pipeline_t *p)
 {
-    exe_free(&p->first);
+    exe_free(&p->last);
     if (p->piped != NULL)
     {
         for (size_t i = 0; i < p->piped_count; i++)
