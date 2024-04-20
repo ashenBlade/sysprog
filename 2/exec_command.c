@@ -14,6 +14,9 @@
 #define PIPE_READ 0
 #define PIPE_WRITE 1
 
+#define RET_CODE_SUCCESS(code) ((code) == 0)
+#define RET_CODE_FAILURE(code) (!RET_CODE_SUCCESS(code))
+
 static char** build_execvp_argv(exe_t* exe)
 {
 	int argv_count = exe->args_count + 2 /* Название самой программы + NULL */;
@@ -57,8 +60,9 @@ __attribute__((noreturn)) static void exec_exe_child(exe_t* exe)
 	exit(1);
 }
 
-static void wait_child(pid_t pid)
+static int wait_child(pid_t pid)
 {
+	/* TODO: код возврата потомка */
 	int status;
 	int ret_code;
 	int ret_pid = waitpid(pid, &status, 0);
@@ -81,6 +85,8 @@ static void wait_child(pid_t pid)
 		{
 			dprintf(STDERR_FILENO, "неизвестная ошибка\n");
 		}
+		/* TODO: что в таких случаях делать надо? Скорее прервать обработку */
+		return 1;
 	}
 	else if ((ret_code = WEXITSTATUS(status)) != 0)
 	{
@@ -91,9 +97,11 @@ static void wait_child(pid_t pid)
 	{
 		dprintf(STDERR_FILENO, "Потомок завершился успешно\n");
 	}
+
+	return ret_code;
 }
 
-static void exec_pipeline(pipeline_t* pp)
+static int exec_pipeline(pipeline_t* pp)
 {
 	if (pp->piped_count == 0)
 	{
@@ -101,20 +109,17 @@ static void exec_pipeline(pipeline_t* pp)
 		const builtin_command_t* bc;
 		if ((bc = get_builtin_command(pp->last.name)) != NULL)
 		{
-			exec_builtin_command(bc, pp->last.args, pp->last.args_count);
-			return;
+			return exec_builtin_command(bc, pp->last.args, pp->last.args_count);
 		}
 
 		int child_pid;
 		if ((child_pid = fork()) == 0)
 		{
 			exec_exe_child(&pp->last);
-			return;
+			return 1;
 		}
 
-		wait_child(child_pid);
-
-		return;
+		return wait_child(child_pid);
 	}
 
 	/*
@@ -190,6 +195,8 @@ static void exec_pipeline(pipeline_t* pp)
 		prev_pipe[PIPE_READ] = cur_pipe[PIPE_READ];
 		prev_pipe[PIPE_WRITE] = cur_pipe[PIPE_WRITE];
 	}
+	/* Результат работы пайплайна - код последней команды в нем */
+	int ret_code;
 
 	/* Последняя команда должна выполняться сразу же если это встроенная
 	 * (сохранение семантики bash) */
@@ -199,7 +206,8 @@ static void exec_pipeline(pipeline_t* pp)
 		/* При запуске встроенной команды необходимо читать вывод из
 		 * последнего пайпа, но при этом нужно и частить */
 		dup2(prev_pipe[PIPE_READ], STDIN_FILENO);
-		exec_builtin_command(builtin, pp->last.args, pp->last.args_count);
+		ret_code =
+		    exec_builtin_command(builtin, pp->last.args, pp->last.args_count);
 	}
 	else
 	{
@@ -207,12 +215,12 @@ static void exec_pipeline(pipeline_t* pp)
 		if ((last_child_pid = fork()) == 0)
 		{
 			dup2(prev_pipe[PIPE_READ], STDIN_FILENO);
-			// close(prev_pipe[PIPE_READ]);
+			close(prev_pipe[PIPE_READ]);
 			exec_exe_child(&pp->last);
-			return;
+			return 1;
 		}
 
-		wait_child(last_child_pid);
+		ret_code = wait_child(last_child_pid);
 	}
 
 	for (size_t i = 0; i < pp->piped_count; i++)
@@ -224,6 +232,8 @@ static void exec_pipeline(pipeline_t* pp)
 	dup2(saved_stdin, STDIN_FILENO);
 	close(saved_stdin);
 	close(prev_pipe[PIPE_READ]);
+
+	return ret_code;
 }
 
 static int get_out_fd(const char* filename, bool is_append, int* fd)
@@ -255,36 +265,12 @@ static void close_out_fd(int fd)
 	}
 }
 
-void exec_command(command_t* cmd)
+/* 
+ * Запустить выполнение пайплайна с учетом возможного перенаправления STDOUT.
+ * Вызывается последним в цепочке вызовов
+ */
+static void exec_pipeline_redirect(pipeline_t *pl, command_t *cmd)
 {
-	/*
-	 * План реализации:
-	 * 0. + Встроенные команды
-	 * 1. + Пайплайн - |
-	 * 2. Перенаправление в файл - >, >>
-	 * 3. + Встроенные команды
-	 * 4. Условия - &&, ||
-	 * 5. Фоновая работа - &
-	 */
-
-	if (0 < cmd->chained_count)
-	{
-		dprintf(STDERR_FILENO, "Условия пока не поддерживаются\n");
-		return;
-	}
-
-	if (cmd->is_bg)
-	{
-		dprintf(STDERR_FILENO, "Фоновая работа пока не поддерживается\n");
-		return;
-	}
-
-	// if (cmd->redirect_filename != NULL)
-	// {
-	// 	dprintf(STDERR_FILENO, "Перенаправление не поддерживается\n");
-	// 	return;
-	// }
-
 	int fd;
 	if (get_out_fd(cmd->redirect_filename, cmd->append, &fd) == -1)
 	{
@@ -294,9 +280,63 @@ void exec_command(command_t* cmd)
 	int saved_stdout = dup(STDOUT_FILENO);
 	dup2(fd, STDOUT_FILENO);
 
-	exec_pipeline(&cmd->first);
+	exec_pipeline(pl);
 
 	dup2(saved_stdout, STDOUT_FILENO);
 	close(saved_stdout);
 	close_out_fd(fd);
+}
+
+void exec_command(command_t* cmd)
+{
+	/*
+	 * План реализации:
+	 * 0. + Встроенные команды
+	 * 1. + Пайплайн - |
+	 * 2. + Перенаправление в файл - >, >>
+	 * 3. + Встроенные команды
+	 * 4. + Условия - &&, ||
+	 * 5. Фоновая работа - &
+	 */
+
+
+	if (cmd->is_bg)
+	{
+		dprintf(STDERR_FILENO, "Фоновая работа пока не поддерживается\n");
+		return;
+	}
+
+	if (0 == cmd->chained_count)
+	{
+		exec_pipeline_redirect(&cmd->first, cmd);
+		return;
+	}
+
+	int prev_ret_code = exec_pipeline(&cmd->first);
+
+	pipeline_condition_t* pc;
+	for (size_t i = 0; i < cmd->chained_count; i++)
+	{
+        /* 
+         * Очередной пайплайн выполнится только в 2 случаях:
+         * 1. && + код успешный
+         * 2. || + код НЕ успешный
+         */
+		pc = cmd->chained + i;
+		if ((pc->is_and && RET_CODE_SUCCESS(prev_ret_code)) ||
+		    (!pc->is_and && RET_CODE_FAILURE(prev_ret_code)))
+		{
+            if (i == (cmd->chained_count - 1))
+            {
+                /* Обновлять код не нужно, т.к. это последняя итерация */
+	            exec_pipeline_redirect(&cmd->chained[cmd->chained_count - 1].pipeline, cmd);
+            }
+            else
+            {
+			    prev_ret_code = exec_pipeline(&pc->pipeline);
+            }
+		}
+	}
+
+
 }

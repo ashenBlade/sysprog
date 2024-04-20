@@ -14,23 +14,26 @@ struct builtin_command
 	/** Название встроенной команды */
 	const char* name;
 	/** Функция для ее выполнения с переданными аргументами */
-	void (*exec)(int argc, const char** argv);
+	int (*exec)(int argc, const char** argv);
 };
 
-static void do_exit(int argc, const char** argv)
+static int do_exit(int argc, const char** argv)
 {
 	if (argc == 0)
 	{
 		exit(0);
+		return 0;
 	}
 
 	if (argc == 1)
 	{
 		int code = (int)strtol(argv[0], NULL, 10);
 		exit(code);
+		return code;
 	}
 
 	dprintf(STDERR_FILENO, "Слишком большое количество аргументов\n");
+	return -1;
 }
 
 static const char* get_pwd()
@@ -45,7 +48,7 @@ static const char* get_pwd()
 	return pw->pw_dir;
 }
 
-static void do_cd(int argc, const char** argv)
+static int do_cd(int argc, const char** argv)
 {
 	const char* path;
 	if (argc == 0)
@@ -54,7 +57,7 @@ static void do_cd(int argc, const char** argv)
 		if (path == NULL)
 		{
 			dprintf(STDERR_FILENO, "Не удалось получить домашний каталог\n");
-			return;
+			return 1;
 		}
 	}
 	else if (argc == 1)
@@ -64,14 +67,16 @@ static void do_cd(int argc, const char** argv)
 	else
 	{
 		dprintf(STDERR_FILENO, "Слишком много директорий указано");
-		return;
+		return 1;
 	}
 
-	if (chdir(path) == -1)
+	int ret_code;
+	if ((ret_code = chdir(path)) == -1)
 	{
 		dprintf(STDERR_FILENO, "Ошибка при смене директорий: %s\n",
 		        strerror(errno));
 	}
+	return ret_code;
 }
 
 static const builtin_command_t builtin_commands[] = {{
@@ -113,6 +118,5 @@ int exec_builtin_command(const builtin_command_t* cmd,
                          const char** argv,
                          int argc)
 {
-	cmd->exec(argc, argv);
-	return 0;
+	return cmd->exec(argc, argv);
 }

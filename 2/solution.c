@@ -107,6 +107,7 @@ int main(void)
 			free_command(&cmd);
 			command_line_delete(line);
 		}
+        /* TODO: не выводить prompt если многострочие */
 		write(STDOUT_FILENO, PROMPT, sizeof(PROMPT));
 	}
 	parser_delete(p);
