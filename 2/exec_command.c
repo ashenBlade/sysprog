@@ -265,11 +265,11 @@ static void close_out_fd(int fd)
 	}
 }
 
-/* 
+/*
  * Запустить выполнение пайплайна с учетом возможного перенаправления STDOUT.
  * Вызывается последним в цепочке вызовов
  */
-static void exec_pipeline_redirect(pipeline_t *pl, command_t *cmd)
+static void exec_pipeline_redirect(pipeline_t* pl, command_t* cmd)
 {
 	int fd;
 	if (get_out_fd(cmd->redirect_filename, cmd->append, &fd) == -1)
@@ -287,6 +287,42 @@ static void exec_pipeline_redirect(pipeline_t *pl, command_t *cmd)
 	close_out_fd(fd);
 }
 
+static void exec_command_main(command_t* cmd)
+{
+	if (0 == cmd->chained_count)
+	{
+		exec_pipeline_redirect(&cmd->first, cmd);
+		return;
+	}
+
+	int prev_ret_code = exec_pipeline(&cmd->first);
+
+	pipeline_condition_t* pc;
+	for (size_t i = 0; i < cmd->chained_count; i++)
+	{
+		/*
+		 * Очередной пайплайн выполнится только в 2 случаях:
+		 * 1. && + код успешный
+		 * 2. || + код НЕ успешный
+		 */
+		pc = cmd->chained + i;
+		if ((pc->is_and && RET_CODE_SUCCESS(prev_ret_code)) ||
+		    (!pc->is_and && RET_CODE_FAILURE(prev_ret_code)))
+		{
+			if (i == (cmd->chained_count - 1))
+			{
+				/* Обновлять код не нужно, т.к. это последняя итерация */
+				exec_pipeline_redirect(
+				    &cmd->chained[cmd->chained_count - 1].pipeline, cmd);
+			}
+			else
+			{
+				prev_ret_code = exec_pipeline(&pc->pipeline);
+			}
+		}
+	}
+}
+
 void exec_command(command_t* cmd)
 {
 	/*
@@ -299,44 +335,77 @@ void exec_command(command_t* cmd)
 	 * 5. Фоновая работа - &
 	 */
 
+	// if (cmd->is_bg)
+	// {
+	// 	dprintf(STDERR_FILENO, "Фоновая работа пока не поддерживается\n");
+	// 	return;
+	// }
 
 	if (cmd->is_bg)
 	{
-		dprintf(STDERR_FILENO, "Фоновая работа пока не поддерживается\n");
-		return;
-	}
-
-	if (0 == cmd->chained_count)
-	{
-		exec_pipeline_redirect(&cmd->first, cmd);
-		return;
-	}
-
-	int prev_ret_code = exec_pipeline(&cmd->first);
-
-	pipeline_condition_t* pc;
-	for (size_t i = 0; i < cmd->chained_count; i++)
-	{
-        /* 
-         * Очередной пайплайн выполнится только в 2 случаях:
-         * 1. && + код успешный
-         * 2. || + код НЕ успешный
-         */
-		pc = cmd->chained + i;
-		if ((pc->is_and && RET_CODE_SUCCESS(prev_ret_code)) ||
-		    (!pc->is_and && RET_CODE_FAILURE(prev_ret_code)))
+		int child_pid;
+		if ((child_pid = fork()) == 0)
 		{
-            if (i == (cmd->chained_count - 1))
-            {
-                /* Обновлять код не нужно, т.к. это последняя итерация */
-	            exec_pipeline_redirect(&cmd->chained[cmd->chained_count - 1].pipeline, cmd);
-            }
-            else
-            {
-			    prev_ret_code = exec_pipeline(&pc->pipeline);
-            }
+			exec_command_main(cmd);
+			kill(getppid(), SIGUSR1);
+			exit(0);
 		}
+
+		dprintf(STDERR_FILENO, "Запущен потомок %d\n", child_pid);
+	}
+	else
+	{
+		exec_command_main(cmd);
+	}
+}
+
+static void itoa(char* buf, int buf_len, int val, int* len, char** start)
+{
+	char val_ch;
+	int i = buf_len - 1;
+	do
+	{
+		val_ch = (char)(val % 10) + '0';
+		buf[i] = val_ch;
+		i--;
+		val /= 10;
+	} while (0 < val && 0 <= i);
+	*len = buf_len - i;
+	*start = buf + i;
+}
+
+static void sigusr1_handler(int signum, siginfo_t* info, void* context_ptr)
+{
+	if (signum != SIGUSR1)
+	{
+		return;
 	}
 
+	pid_t child_pid = info->si_pid;
+	int status;
 
+	// waitpid(child_pid, &status, 0);
+
+	// char buf[12];
+	// int len;
+	// char* start;
+	// itoa(buf, 12, info->si_pid, &len, &start);
+	// write(STDERR_FILENO, "Потомок ", sizeof("Потомок "));
+	// write(STDERR_FILENO, start, len);
+	// write(STDERR_FILENO, " завершился\n", sizeof(" завершился\n"));
+}
+
+void setup_executor()
+{
+	struct sigaction sa = {
+	    .sa_flags = SA_SIGINFO,
+	    .sa_sigaction = sigusr1_handler,
+	};
+	sigemptyset(&sa.sa_mask);
+
+	if (sigaction(SIGUSR1, &sa, NULL) == -1)
+	{
+		perror("sigaction");
+		exit(1);
+	}
 }

@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <errno.h>
 
 #include "exec_command.h"
 #include "parse_command.h"
@@ -83,9 +84,22 @@ int main(void)
 	char buf[buf_size];
 	int rc;
 	struct parser* p = parser_new();
+	setup_executor();
 	write(STDOUT_FILENO, PROMPT, sizeof(PROMPT));
-	while ((rc = read(STDIN_FILENO, buf, buf_size)) > 0)
+	while ((rc = read(STDIN_FILENO, buf, buf_size)) > 0 || (rc == -1 && errno == EINTR ))
 	{
+        if (rc == -1)
+        {
+            if (errno == EINTR)
+            {
+                /* 
+                 * Возможно, когда фоновый процесс посылает нам SIGUSR1
+                 */
+                continue;
+            }
+			break;
+		}
+
 		parser_feed(p, buf, rc);
 		struct command_line* line = NULL;
 		while (true)
@@ -107,7 +121,6 @@ int main(void)
 			free_command(&cmd);
 			command_line_delete(line);
 		}
-        /* TODO: не выводить prompt если многострочие */
 		write(STDOUT_FILENO, PROMPT, sizeof(PROMPT));
 	}
 	parser_delete(p);

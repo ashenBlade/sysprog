@@ -3,6 +3,9 @@
 
 #include "command.h"
 
+/** Функция для настройки окружения исполнения команд */
+void setup_executor();
+
 /** Выполнить указанную команду */
 void exec_command(command_t* command);
 
