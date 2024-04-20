@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <complex.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,14 +42,19 @@ __attribute__((noreturn)) static void exec_exe_child(exe_t* exe)
 	char** argv = build_execvp_argv(exe);
 	execvp(argv[0], argv);
 	perror("execvp");
-	exit(1);
-}
+	dprintf(STDERR_FILENO, "[Log:%d]: ошибка исполнения: %s", getpid(),
+	        argv[0]);
+	if (0 < exe->args_count)
+	{
+		for (size_t i = 0; i < exe->args_count; i++)
+		{
+			dprintf(STDERR_FILENO, " %s", exe->args[i]);
+		}
+	}
 
-/* Запустить  */
-__attribute__((noreturn)) static void exec_exe_pipe(exe_t* exe,
-                                                    int fd_in,
-                                                    int fd_out)
-{
+	dprintf(STDERR_FILENO, "\n");
+
+	exit(1);
 }
 
 static void wait_child(pid_t pid)
@@ -91,6 +97,7 @@ static void exec_pipeline(pipeline_t* pp)
 {
 	if (pp->piped_count == 0)
 	{
+		/* Короткий путь для единственной команды */
 		const builtin_command_t* bc;
 		if ((bc = get_builtin_command(pp->last.name)) != NULL)
 		{
@@ -110,12 +117,33 @@ static void exec_pipeline(pipeline_t* pp)
 		return;
 	}
 
+	/*
+	 * Если имеется пайплайн (не 1 команда), то ее представление следующее:
+	 *
+	 * pp->piped[0] | pp->piped[1] | ... | pp->piped[pp->piped_count - 1] |
+	 * pp->last
+	 *
+	 * Таким образом, все организуется в цикл (i - текущий индекс):
+	 * - Читаем из предыдущего пайпа
+	 * - Создаем следующий и пишем в него
+	 * - После создания потомка обмениваем предыдущий и текущий пайпы
+	 *
+	 * Команды в пайплайне (pp->piped) всегда выполняются в subshell, т.е. в
+	 * потомке. Но если последняя команда встроенная (exit, cd), то
+	 * - Выполняется в самом шеле
+	 * - Надо перенаправить STDIN из предыдущего пайпа и
+	 * - Восстановить STDIN после выполнения.
+	 *
+	 * Но даже если и не встроенная, то не нужно вызывать pipe, т.к. вывод будет
+	 * в STDOUT
+	 */
+
 	/* Первая команда в пайплайне будет использовать исходные stdin/stdout */
+	int saved_stdin = dup(STDIN_FILENO);
 	int prev_pipe[2] = {
 	    [PIPE_READ] = STDIN_FILENO,
 	    [PIPE_WRITE] = STDOUT_FILENO,
 	};
-	/* Массив для всех дескрипторов потомков */
 	int* child_pids = (int*)malloc(sizeof(int) * pp->piped_count);
 
 	for (size_t i = 0; i < pp->piped_count; i++)
@@ -130,24 +158,37 @@ static void exec_pipeline(pipeline_t* pp)
 		int child_pid;
 		if ((child_pid = fork()) == 0)
 		{
-			dup2(cur_pipe[PIPE_WRITE], STDOUT_FILENO);
-			dup2(prev_pipe[PIPE_READ], STDIN_FILENO);
-			close(cur_pipe[PIPE_WRITE]);
-			close(prev_pipe[PIPE_READ]);
+			if (cur_pipe[PIPE_WRITE] != STDOUT_FILENO)
+			{
+				if (dup2(cur_pipe[PIPE_WRITE], STDOUT_FILENO) == -1)
+				{
+					dprintf(STDERR_FILENO, "dup2(STDOUT_FILENO): %s\n",
+					        strerror(errno));
+					exit(1);
+				}
+				close(cur_pipe[PIPE_WRITE]);
+			}
+
+			if (prev_pipe[PIPE_READ] != STDIN_FILENO)
+			{
+				if (dup2(prev_pipe[PIPE_READ], STDIN_FILENO) == -1)
+				{
+					dprintf(STDERR_FILENO, "dup2(STDIN_FILENO): %s\n",
+					        strerror(errno));
+					exit(1);
+				}
+				close(prev_pipe[PIPE_READ]);
+			}
+
 			exec_exe_child(pp->piped + i);
 		}
 
-		if (prev_pipe[PIPE_READ] != STDIN_FILENO)
-		{
-			/* Осторожно закрываем пайп для чтения предыдущий, так как там может
-			 * находиться STDIN */
-			close(prev_pipe[PIPE_READ]);
-		}
+		close(prev_pipe[PIPE_READ]);
 		close(cur_pipe[PIPE_WRITE]);
 
 		child_pids[i] = child_pid;
-		prev_pipe[0] = cur_pipe[0];
-		prev_pipe[1] = cur_pipe[1];
+		prev_pipe[PIPE_READ] = cur_pipe[PIPE_READ];
+		prev_pipe[PIPE_WRITE] = cur_pipe[PIPE_WRITE];
 	}
 
 	/* Последняя команда должна выполняться сразу же если это встроенная
@@ -157,11 +198,8 @@ static void exec_pipeline(pipeline_t* pp)
 	{
 		/* При запуске встроенной команды необходимо читать вывод из
 		 * последнего пайпа, но при этом нужно и частить */
-		int saved_stdin = dup(STDIN_FILENO);
 		dup2(prev_pipe[PIPE_READ], STDIN_FILENO);
 		exec_builtin_command(builtin, pp->last.args, pp->last.args_count);
-		dup2(saved_stdin, STDIN_FILENO);
-		close(saved_stdin);
 	}
 	else
 	{
@@ -169,7 +207,7 @@ static void exec_pipeline(pipeline_t* pp)
 		if ((last_child_pid = fork()) == 0)
 		{
 			dup2(prev_pipe[PIPE_READ], STDIN_FILENO);
-			close(prev_pipe[PIPE_READ]);
+			// close(prev_pipe[PIPE_READ]);
 			exec_exe_child(&pp->last);
 			return;
 		}
@@ -178,11 +216,43 @@ static void exec_pipeline(pipeline_t* pp)
 	}
 
 	for (size_t i = 0; i < pp->piped_count; i++)
-    {
+	{
 		wait_child(child_pids[i]);
-    }
-	
+	}
+
+	/* Восстанавливаем STDIN */
+	dup2(saved_stdin, STDIN_FILENO);
+	close(saved_stdin);
 	close(prev_pipe[PIPE_READ]);
+}
+
+static int get_out_fd(const char* filename, bool is_append, int* fd)
+{
+	if (filename == NULL)
+	{
+		*fd = STDOUT_FILENO;
+		return 0;
+	}
+
+	/* -rw|-r-|-r- */
+	const int mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
+	int flags = O_CREAT | O_WRONLY;
+	flags |= (is_append ? O_APPEND : O_TRUNC);
+	if ((*fd = open(filename, flags, mode)) == -1)
+	{
+		dprintf(STDERR_FILENO, "Ошибка открытия файла %s: %s\n", filename,
+		        strerror(errno));
+		return -1;
+	}
+	return 0;
+}
+
+static void close_out_fd(int fd)
+{
+	if (fd != STDOUT_FILENO)
+	{
+		close(fd);
+	}
 }
 
 void exec_command(command_t* cmd)
@@ -190,9 +260,9 @@ void exec_command(command_t* cmd)
 	/*
 	 * План реализации:
 	 * 0. + Встроенные команды
-	 * 1. Пайплайн - |
+	 * 1. + Пайплайн - |
 	 * 2. Перенаправление в файл - >, >>
-	 * 3. Встроенные команды
+	 * 3. + Встроенные команды
 	 * 4. Условия - &&, ||
 	 * 5. Фоновая работа - &
 	 */
@@ -209,17 +279,24 @@ void exec_command(command_t* cmd)
 		return;
 	}
 
-	if (cmd->redirect_filename != 0)
-	{
-		dprintf(STDERR_FILENO, "Перенаправление не поддерживается\n");
-		return;
-	}
-
-	// if (0 < cmd->first.piped_count)
+	// if (cmd->redirect_filename != NULL)
 	// {
-	// 	dprintf(STDERR_FILENO, "Пайпы пока не поддерживаются\n");
+	// 	dprintf(STDERR_FILENO, "Перенаправление не поддерживается\n");
 	// 	return;
 	// }
 
+	int fd;
+	if (get_out_fd(cmd->redirect_filename, cmd->append, &fd) == -1)
+	{
+		return;
+	}
+
+	int saved_stdout = dup(STDOUT_FILENO);
+	dup2(fd, STDOUT_FILENO);
+
 	exec_pipeline(&cmd->first);
+
+	dup2(saved_stdout, STDOUT_FILENO);
+	close(saved_stdout);
+	close_out_fd(fd);
 }
