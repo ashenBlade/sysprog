@@ -94,7 +94,7 @@ void command_line_delete(struct command_line *line)
                 free(cmd->args[i]);
             free(cmd->args);
         }
-        line->head = e->next;
+		line->head = e->next;
         free(e);
     }
     free(line->out_file);
