@@ -27,12 +27,28 @@ static char** build_execvp_argv(exe_t* exe)
 	return argv;
 }
 
-__attribute__((noreturn)) static void exec_exe(exe_t* exe)
+/* Запустить указанную команду в потомке. На этом моменте stdout и stdin должны
+ * быть настроены */
+__attribute__((noreturn)) static void exec_exe_child(exe_t* exe)
 {
+	const builtin_command_t* bc;
+	if ((bc = get_builtin_command(exe->name)) != NULL)
+	{
+		exec_builtin_command(bc, exe->args, exe->args_count);
+		exit(0);
+	}
+
 	char** argv = build_execvp_argv(exe);
 	execvp(argv[0], argv);
 	perror("execvp");
 	exit(1);
+}
+
+/* Запустить  */
+__attribute__((noreturn)) static void exec_exe_pipe(exe_t* exe,
+                                                    int fd_in,
+                                                    int fd_out)
+{
 }
 
 static void wait_child(pid_t pid)
@@ -85,7 +101,7 @@ static void exec_pipeline(pipeline_t* pp)
 		int child_pid;
 		if ((child_pid = fork()) == 0)
 		{
-			exec_exe(&pp->last);
+			exec_exe_child(&pp->last);
 			return;
 		}
 
@@ -94,54 +110,79 @@ static void exec_pipeline(pipeline_t* pp)
 		return;
 	}
 
-	if (pp->piped_count == 1)
+	/* Первая команда в пайплайне будет использовать исходные stdin/stdout */
+	int prev_pipe[2] = {
+	    [PIPE_READ] = STDIN_FILENO,
+	    [PIPE_WRITE] = STDOUT_FILENO,
+	};
+	/* Массив для всех дескрипторов потомков */
+	int* child_pids = (int*)malloc(sizeof(int) * pp->piped_count);
+
+	for (size_t i = 0; i < pp->piped_count; i++)
 	{
-		int fds[2];
-		if (pipe(fds) == -1)
+		int cur_pipe[2];
+		if (pipe(cur_pipe) == -1)
 		{
 			perror("pipe");
 			exit(1);
 		}
 
-		int first_child_pid;
-		if ((first_child_pid = fork()) == 0)
+		int child_pid;
+		if ((child_pid = fork()) == 0)
 		{
-			dup2(fds[PIPE_WRITE], STDOUT_FILENO);
-			close(fds[PIPE_WRITE]);
-			exec_exe(pp->piped);
+			dup2(cur_pipe[PIPE_WRITE], STDOUT_FILENO);
+			dup2(prev_pipe[PIPE_READ], STDIN_FILENO);
+			close(cur_pipe[PIPE_WRITE]);
+			close(prev_pipe[PIPE_READ]);
+			exec_exe_child(pp->piped + i);
 		}
-		close(fds[PIPE_WRITE]);
 
-		const builtin_command_t* builtin;
-		if ((builtin = get_builtin_command(pp->last.name)) != NULL)
+		if (prev_pipe[PIPE_READ] != STDIN_FILENO)
 		{
-			
-			// int saved = dup(STDIN_FILENO);
-			dup2(fds[PIPE_READ], STDIN_FILENO);
-			close(fds[PIPE_READ]);
-			exec_builtin_command(builtin, pp->last.args, pp->last.args_count);
-			// dup2(saved, STDIN_FILENO);
+			/* Осторожно закрываем пайп для чтения предыдущий, так как там может
+			 * находиться STDIN */
+			close(prev_pipe[PIPE_READ]);
 		}
-		else
-		{
-			int last_child_pid;
-			if ((last_child_pid = fork()) == 0)
-			{
-				dup2(fds[PIPE_READ], STDIN_FILENO);
-				close(fds[PIPE_READ]);
-				exec_exe(&pp->last);
-				return;
-			}
+		close(cur_pipe[PIPE_WRITE]);
 
-			wait_child(last_child_pid);
-		}
-        close(fds[PIPE_READ]);
-		wait_child(first_child_pid);
-		return;
+		child_pids[i] = child_pid;
+		prev_pipe[0] = cur_pipe[0];
+		prev_pipe[1] = cur_pipe[1];
 	}
 
-	/* Пока не поддерживаю пайплайны, пойдут сюда */
-	assert(false);
+	/* Последняя команда должна выполняться сразу же если это встроенная
+	 * (сохранение семантики bash) */
+	const builtin_command_t* builtin;
+	if ((builtin = get_builtin_command(pp->last.name)) != NULL)
+	{
+		/* При запуске встроенной команды необходимо читать вывод из
+		 * последнего пайпа, но при этом нужно и частить */
+		int saved_stdin = dup(STDIN_FILENO);
+		dup2(prev_pipe[PIPE_READ], STDIN_FILENO);
+		exec_builtin_command(builtin, pp->last.args, pp->last.args_count);
+		dup2(saved_stdin, STDIN_FILENO);
+		close(saved_stdin);
+	}
+	else
+	{
+		int last_child_pid;
+		if ((last_child_pid = fork()) == 0)
+		{
+			dup2(prev_pipe[PIPE_READ], STDIN_FILENO);
+			close(prev_pipe[PIPE_READ]);
+			exec_exe_child(&pp->last);
+			return;
+		}
+
+		wait_child(last_child_pid);
+	}
+
+	for (size_t i = 0; i < pp->piped_count; i++)
+    {
+		wait_child(child_pids[i]);
+    }
+	
+	close(prev_pipe[PIPE_READ]);
 }
 
 void exec_command(command_t* cmd)
