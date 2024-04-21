@@ -46,11 +46,31 @@ typedef struct file
     struct file *next;
     struct file *prev;
 
-    /* PUT HERE OTHER MEMBERS */
+    /** Удален ли файл*/
+    bool deleted;
 } ufile_t;
 
+static void
+ufile_init(ufile_t *file, const char *filename)
+{
+    file->name = strdup(filename);
+    file->block_list = NULL;
+    file->last_block = NULL;
+    file->next = NULL;
+    file->prev = NULL;
+    file->refs = 0;
+    file->deleted = false;
+}
+
+static void
+ufile_delete(ufile_t *file)
+{
+    free(file->name);
+    /* TODO */
+}
+
 /** List of all files. */
-static ufile_t *file_list = NULL;
+static ufile_t *ufile_list = NULL;
 
 typedef struct filedesc
 {
@@ -61,10 +81,25 @@ typedef struct filedesc
 } ufd_t;
 
 static void
-filedesc_init(ufd_t *fd, ufile_t *file)
+ufd_init(ufd_t *fd, ufile_t *file)
 {
+    ++file->refs;
     fd->file = file;
     fd->pos = 0;
+}
+
+static void
+ufd_close(ufd_t *ufd)
+{
+    int left_refs = --ufd->file->refs;
+
+    if (left_refs == 0 && ufd->file->deleted)
+    {
+        ufile_delete(ufd->file);
+    }
+
+    ufd->file = NULL;
+    ufd->pos = 0;
 }
 
 /**
@@ -88,15 +123,15 @@ ufs_errno()
 static ufile_t *
 search_existing_file(const char *filename)
 {
-    if (file_list == NULL)
+    if (ufile_list == NULL)
     {
         return NULL;
     }
 
-    struct file *cur = file_list;
+    struct file *cur = ufile_list;
     do
     {
-        if (strcmp(cur->name, filename) == 0)
+        if (strcmp(cur->name, filename) == 0 && !cur->deleted)
         {
             return cur;
         }
@@ -108,39 +143,20 @@ search_existing_file(const char *filename)
 static void
 file_list_add(ufile_t *file)
 {
-    if (file_list == NULL)
+    if (ufile_list == NULL)
     {
-        file_list = file;
+        ufile_list = file;
         return;
     }
 
-    assert(strcmp(file->name, file_list->name) != 0 && "Проверка существования файла должна быть произведена выше");
-
-    ufile_t *cur = file_list;
+    ufile_t *cur = ufile_list;
     while (cur->next != NULL)
     {
         cur = cur->next;
-        assert(strcmp(file->name, cur->name) != 0 && "Проверка существования файла должна быть произведена выше");
     }
 
     file->prev = cur;
     cur->next = file;
-}
-
-static ufile_t *
-create_file(const char *filename)
-{
-    ufile_t *file = (ufile_t *)calloc(1, sizeof(ufile_t));
-    file->name = strdup(filename);
-    file->block_list = NULL;
-    file->last_block = NULL;
-    file->next = NULL;
-    file->prev = NULL;
-    file->refs = 0;
-
-    file_list_add(file);
-
-    return file;
 }
 
 static int
@@ -154,6 +170,7 @@ create_file_desc(ufile_t *file)
         /* Изначально массив дескрипторов не инициализирован */
         ufds = (ufd_t **)calloc(INITIAL_FD_LIST_CAPACITY, sizeof(ufd_t *));
         ufds_capacity = INITIAL_FD_LIST_CAPACITY;
+        ++ufds_count;
         fd = 0;
     }
     else
@@ -167,9 +184,10 @@ create_file_desc(ufile_t *file)
                 break;
             }
         }
+
+        /* Если не нашли, то берем последний + проверяем вместимость массива */
         if (fd == -1)
         {
-            /* Если не нашли, то берем последний + проверяем вместимость массива */
             if (ufds_capacity == ufds_count)
             {
                 ufds_capacity *= 2;
@@ -177,25 +195,18 @@ create_file_desc(ufile_t *file)
             }
 
             fd = ufds_count;
+            ++ufds_count;
         }
     }
 
     ufd_t *ufd = (ufd_t *)calloc(1, sizeof(ufd_t));
-    filedesc_init(ufd, file);
+    ufd_init(ufd, file);
     ufds[fd] = ufd;
     return fd;
 }
 
 int ufs_open(const char *filename, int flags)
 {
-    /* IMPLEMENT THIS FUNCTION */
-    (void)filename;
-    (void)flags;
-    (void)file_list;
-    (void)ufds;
-    (void)ufds_count;
-    (void)ufds_capacity;
-    ufs_error_code = UFS_ERR_NOT_IMPLEMENTED;
     /*
      * 1. Нахождение файла по его имени среди всех
      * 2. Создание при необходимости (flags)
@@ -208,7 +219,9 @@ int ufs_open(const char *filename, int flags)
     {
         if (flags && UFS_CREATE)
         {
-            file = create_file(filename);
+            file = (ufile_t *)calloc(1, sizeof(ufile_t));
+            ufile_init(file, filename);
+            file_list_add(file);
         }
         else
         {
@@ -218,6 +231,17 @@ int ufs_open(const char *filename, int flags)
     }
 
     return create_file_desc(file);
+}
+
+static ufd_t *
+search_ufd(int fd)
+{
+    if (fd < 0 || ufds_count <= fd)
+    {
+        return NULL;
+    }
+
+    return ufds[fd];
 }
 
 ssize_t
@@ -244,18 +268,69 @@ ufs_read(int fd, char *buf, size_t size)
 
 int ufs_close(int fd)
 {
-    /* IMPLEMENT THIS FUNCTION */
-    (void)fd;
-    ufs_error_code = UFS_ERR_NOT_IMPLEMENTED;
-    return -1;
+    ufd_t *ufd = search_ufd(fd);
+    if (ufd == NULL)
+    {
+        ufs_error_code = UFS_ERR_NO_FILE;
+        return -1;
+    }
+
+    ufd_close(ufd);
+    ufds[fd] = NULL;
+    free((void *)ufd);
+    return 0;
+}
+
+static ufile_t *
+search_ufile(const char *filename)
+{
+    ufile_t *cur = ufile_list;
+    while (cur != NULL)
+    {
+        if (strcmp(cur->name, filename) == 0)
+        {
+            return cur;
+        }
+        cur = cur->next;
+    }
+
+    return NULL;
 }
 
 int ufs_delete(const char *filename)
 {
-    /* IMPLEMENT THIS FUNCTION */
-    (void)filename;
-    ufs_error_code = UFS_ERR_NOT_IMPLEMENTED;
-    return -1;
+    if (filename == NULL)
+    {
+        return -1;
+    }
+
+    ufile_t *file = search_ufile(filename);
+    if (file->deleted)
+    {
+        /* Уже удален */
+        return 0;
+    }
+
+    file->deleted = true;
+    ufile_t *next = file->next,
+            *prev = file->prev;
+    if (next != NULL)
+    {
+        next->prev = prev;
+    }
+
+    if (prev != NULL)
+    {
+        prev->next = next;
+    }
+
+    if (file->refs == 0)
+    {
+        ufile_delete(file);
+        free(file);
+    }
+
+    return 0;
 }
 
 void ufs_destroy(void)
