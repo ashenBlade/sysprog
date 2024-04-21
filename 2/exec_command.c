@@ -62,7 +62,6 @@ __attribute__((noreturn)) static void exec_exe_child(exe_t* exe)
 
 static int wait_child(pid_t pid)
 {
-	/* TODO: код возврата потомка */
 	int status;
 	int ret_code;
 	int ret_pid = waitpid(pid, &status, 0);
@@ -85,7 +84,7 @@ static int wait_child(pid_t pid)
 		{
 			dprintf(STDERR_FILENO, "неизвестная ошибка\n");
 		}
-		/* TODO: что в таких случаях делать надо? Скорее прервать обработку */
+
 		return 1;
 	}
 	else if ((ret_code = WEXITSTATUS(status)) != 0)
@@ -328,23 +327,20 @@ static void exec_command_main(command_t* cmd)
 	}
 }
 
+static void child_atexit(void)
+{
+	kill(getppid(), SIGUSR1);
+}
+
 void exec_command(command_t* cmd)
 {
-	/*
-	 * TODO: echo 123 | cat | cat - "cat: -: Неправильный дескриптор файла"
-	 * Завтра:
-	 * 1. Тесты
-	 * 2. Проверка памяти
-	 * 3. Описание решения
-	 */
-
 	if (cmd->is_bg)
 	{
 		int child_pid;
 		if ((child_pid = fork()) == 0)
 		{
+			atexit(child_atexit);
 			exec_command_main(cmd);
-			kill(getppid(), SIGUSR1);
 			exit(0);
 		}
 
