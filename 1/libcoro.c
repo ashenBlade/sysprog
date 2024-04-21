@@ -289,17 +289,21 @@ coro_body(int signum)
 struct coro *
 coro_new(coro_f func, void *func_arg)
 {
-    struct coro *c = (struct coro *)malloc(sizeof(*c));
+    struct coro *c = (struct coro *)calloc(1, sizeof(*c));
     c->ret = 0;
     int stack_size = 1024 * 1024;
     if (stack_size < SIGSTKSZ)
         stack_size = SIGSTKSZ;
 
-    c->stack = malloc(stack_size);
+    c->stack = calloc(1, stack_size);
     c->func = func;
     c->func_arg = func_arg;
     c->is_finished = false;
     c->switch_count = 0;
+    memset(&c->start_time, 0, sizeof(c->start_time));
+    memset(&c->quantum, 0, sizeof(c->quantum));
+    memset(&c->total_work_time, 0, sizeof(c->total_work_time));
+
     /*
      * SIGUSR2 is used. First of all, block new signals to be
      * able to set a new handler.
