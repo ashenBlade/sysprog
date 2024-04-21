@@ -115,7 +115,7 @@ init_coro(prog_args_t *args)
     struct timespec latency;
     us_to_timespec(args->latency_us, &latency);
     struct timespec coro_lat;
-    timespec_div(&latency, args->files_count, &coro_lat);
+    timespec_div(&latency, args->coro_count, &coro_lat);
     fprintf(stderr, "Рассчитанная задержка корутин: %lld с, %lld нс\n", (long long)coro_lat.tv_sec, (long long)coro_lat.tv_nsec);
     fprintf(stderr, "Количество корутин: %d\n", args->coro_count);
     coro_sched_init(&coro_lat);
