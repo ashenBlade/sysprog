@@ -20,9 +20,9 @@
 static char** build_execvp_argv(exe_t* exe)
 {
 	int argv_count = exe->args_count + 2 /* Название самой программы + NULL */;
-	char** argv = (char**)malloc(sizeof(char*) * argv_count);
+	char** argv = (char**)calloc(argv_count, sizeof(char*));
 	argv[0] = strdup(exe->name);
-	argv[argv_count] = NULL;
+	argv[argv_count - 1] = NULL;
 	for (int i = 0; i < exe->args_count; i++)
 	{
 		argv[i + 1] = strdup(exe->args[i]);
@@ -38,8 +38,7 @@ __attribute__((noreturn)) static void exec_exe_child(exe_t* exe)
 	const builtin_command_t* bc;
 	if ((bc = get_builtin_command(exe->name)) != NULL)
 	{
-		exec_builtin_command(bc, exe->args, exe->args_count);
-		exit(0);
+		exit(exec_builtin_command(bc, exe->args, exe->args_count));
 	}
 
 	char** argv = build_execvp_argv(exe);

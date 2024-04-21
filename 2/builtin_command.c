@@ -85,7 +85,7 @@ static const builtin_command_t builtin_commands[] = {
         .exec = do_exit,
     },
     {
-        .name = "cdasdfasdf",
+        .name = "cd",
         .exec = do_cd,
     },
 };
