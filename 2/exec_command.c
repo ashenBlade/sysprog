@@ -214,8 +214,12 @@ static int exec_pipeline(pipeline_t* pp)
 		int last_child_pid;
 		if ((last_child_pid = fork()) == 0)
 		{
-			dup2(prev_pipe[PIPE_READ], STDIN_FILENO);
-			close(prev_pipe[PIPE_READ]);
+			if (prev_pipe[PIPE_READ != STDIN_FILENO])
+			{
+				dup2(prev_pipe[PIPE_READ], STDIN_FILENO);
+				close(prev_pipe[PIPE_READ]);
+			}
+
 			exec_exe_child(&pp->last);
 			return 1;
 		}
@@ -225,8 +229,9 @@ static int exec_pipeline(pipeline_t* pp)
 
 	for (size_t i = 0; i < pp->piped_count; i++)
 	{
-		wait_child(child_pids[i]);
+		(void)wait_child(child_pids[i]);
 	}
+	free(child_pids);
 
 	/* Восстанавливаем STDIN */
 	dup2(saved_stdin, STDIN_FILENO);
@@ -326,20 +331,12 @@ static void exec_command_main(command_t* cmd)
 void exec_command(command_t* cmd)
 {
 	/*
-	 * План реализации:
-	 * 0. + Встроенные команды
-	 * 1. + Пайплайн - |
-	 * 2. + Перенаправление в файл - >, >>
-	 * 3. + Встроенные команды
-	 * 4. + Условия - &&, ||
-	 * 5. Фоновая работа - &
+	 * TODO: echo 123 | cat | cat - "cat: -: Неправильный дескриптор файла"
+	 * Завтра:
+	 * 1. Тесты
+	 * 2. Проверка памяти
+	 * 3. Описание решения
 	 */
-
-	// if (cmd->is_bg)
-	// {
-	// 	dprintf(STDERR_FILENO, "Фоновая работа пока не поддерживается\n");
-	// 	return;
-	// }
 
 	if (cmd->is_bg)
 	{
