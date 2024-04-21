@@ -120,6 +120,16 @@ coro_current_work_time(struct coro *c, struct timespec *work_time)
     timespec_sub(&now, &c->start_time, work_time);
 }
 
+static void
+coro_track_worktime(struct coro *c)
+{
+    struct timespec current_work_time;
+    struct timespec new_work_time;
+    coro_current_work_time(c, &current_work_time);
+    timespec_add(&c->total_work_time, &current_work_time, &new_work_time);
+    c->total_work_time = new_work_time;
+}
+
 /** Switch the current coroutine to an arbitrary one. */
 static void
 coro_yield_to(struct coro *to)
@@ -127,11 +137,7 @@ coro_yield_to(struct coro *to)
     struct coro *from = coro_this_ptr;
     ++from->switch_count;
     
-    struct timespec current_work_time;
-    struct timespec new_work_time;
-    coro_current_work_time(from, &current_work_time);
-    timespec_add(&from->total_work_time, &current_work_time, &new_work_time);
-    from->total_work_time = new_work_time;
+    coro_track_worktime(from);
     memset(&to->start_time, 0, sizeof(struct timespec));
     from->is_running = false;
 
@@ -266,6 +272,8 @@ coro_body(int signum)
 
     c->ret = c->func(c->func_arg);
 
+    coro_track_worktime(c);
+
     c->is_finished = true;
     c->is_running = false;
     /* Can not return - 'ret' address is invalid already! */
@@ -274,6 +282,7 @@ coro_body(int signum)
         printf("Critical error - no place to return!\n");
         exit(-1);
     }
+
     siglongjmp(coro_sched.ctx, 1);
 }
 
