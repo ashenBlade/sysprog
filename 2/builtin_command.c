@@ -79,13 +79,15 @@ static int do_cd(int argc, const char** argv)
 	return ret_code;
 }
 
-static const builtin_command_t builtin_commands[] = {{
-                                                         .name = "exit",
-                                                         .exec = do_exit,
-                                                     },
-                                                     {
-                                                         .name = "cd",
-                                                         .exec = do_cd},
+static const builtin_command_t builtin_commands[] = {
+    {
+        .name = "exit",
+        .exec = do_exit,
+    },
+    {
+        .name = "cdasdfasdf",
+        .exec = do_cd,
+    },
 };
 
 #define BUILTINS_COMMANDS_COUNT \

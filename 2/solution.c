@@ -75,7 +75,7 @@ int main(void)
 	struct parser* p = parser_new();
 	setup_executor();
 	write(STDOUT_FILENO, PROMPT, sizeof(PROMPT));
-	while ((rc = read(STDIN_FILENO, buf, buf_size)) > 0 || (rc == -1 && errno == EINTR ))
+	while ((rc = read(STDIN_FILENO, buf, buf_size)) > 0 || rc == -1)
 	{
         if (rc == -1)
         {
@@ -86,6 +86,7 @@ int main(void)
                  */
                 continue;
             }
+			perror("read");
 			break;
 		}
 
@@ -112,6 +113,7 @@ int main(void)
 		}
 		write(STDOUT_FILENO, PROMPT, sizeof(PROMPT));
 	}
+    /* TODO: bad file descriptor */
 	parser_delete(p);
 	return 0;
 }

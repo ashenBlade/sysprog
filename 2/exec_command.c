@@ -63,7 +63,6 @@ __attribute__((noreturn)) static void exec_exe_child(exe_t* exe)
 static int wait_child(pid_t pid)
 {
 	int status;
-	int ret_code;
 	int ret_pid = waitpid(pid, &status, 0);
 	if (ret_pid == -1)
 	{
@@ -71,33 +70,16 @@ static int wait_child(pid_t pid)
 		exit(1);
 	}
 
-	dprintf(STDERR_FILENO, "[Log:%d]: ", pid);
 	if (!WIFEXITED(status))
 	{
-		dprintf(STDERR_FILENO, "Потомок завершился аварийно: ");
-		if (WIFSIGNALED(status))
-		{
-			dprintf(STDERR_FILENO, "получен сигнал %s\n",
-			        strerror(WTERMSIG(status)));
-		}
-		else
-		{
-			dprintf(STDERR_FILENO, "неизвестная ошибка\n");
-		}
-
+		/*
+		 * Статус код получить не могу.
+		 * Просто возвращаю 1 (не лучшая идея)
+		 */
 		return 1;
 	}
-	else if ((ret_code = WEXITSTATUS(status)) != 0)
-	{
-		dprintf(STDERR_FILENO,
-		        "Потомок завершился с неуспешным статус кодом %d\n", ret_code);
-	}
-	else
-	{
-		dprintf(STDERR_FILENO, "Потомок завершился успешно\n");
-	}
 
-	return ret_code;
+	return WEXITSTATUS(status);
 }
 
 static int exec_pipeline(pipeline_t* pp)
@@ -235,7 +217,16 @@ static int exec_pipeline(pipeline_t* pp)
 	/* Восстанавливаем STDIN */
 	dup2(saved_stdin, STDIN_FILENO);
 	close(saved_stdin);
-	close(prev_pipe[PIPE_READ]);
+	if (prev_pipe[PIPE_READ] != STDIN_FILENO)
+	{
+		/*
+		 * Возможна ситуация, когда после закрытия STDIN на предыдущем шаге
+		 * pipe вернет дескриптор 0 (STDIN).
+		 * Такое может произойти, если команд в в пайплайне 3.
+		 * Например: echo 1 | echo 2 | echo 3
+		 */
+		close(prev_pipe[PIPE_READ]);
+	}
 
 	return ret_code;
 }
