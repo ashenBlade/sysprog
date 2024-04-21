@@ -49,7 +49,7 @@ __attribute__((noreturn)) static void exec_exe_child(exe_t* exe)
 	        argv[0]);
 	if (0 < exe->args_count)
 	{
-		for (size_t i = 0; i < exe->args_count; i++)
+		for (int i = 0; i < exe->args_count; i++)
 		{
 			dprintf(STDERR_FILENO, " %s", exe->args[i]);
 		}
@@ -151,7 +151,7 @@ static int exec_pipeline(pipeline_t* pp)
 	};
 	int* child_pids = (int*)malloc(sizeof(int) * pp->piped_count);
 
-	for (size_t i = 0; i < pp->piped_count; i++)
+	for (int i = 0; i < pp->piped_count; i++)
 	{
 		int cur_pipe[2];
 		if (pipe(cur_pipe) == -1)
@@ -227,7 +227,7 @@ static int exec_pipeline(pipeline_t* pp)
 		ret_code = wait_child(last_child_pid);
 	}
 
-	for (size_t i = 0; i < pp->piped_count; i++)
+	for (int i = 0; i < pp->piped_count; i++)
 	{
 		(void)wait_child(child_pids[i]);
 	}
@@ -303,7 +303,7 @@ static void exec_command_main(command_t* cmd)
 	int prev_ret_code = exec_pipeline(&cmd->first);
 
 	pipeline_condition_t* pc;
-	for (size_t i = 0; i < cmd->chained_count; i++)
+	for (int i = 0; i < cmd->chained_count; i++)
 	{
 		/*
 		 * Очередной пайплайн выполнится только в 2 случаях:
@@ -373,6 +373,7 @@ static void itoa(char* buf, int buf_len, int val, int* len, char** start)
 
 static void sigusr1_handler(int signum, siginfo_t* info, void* context_ptr)
 {
+	(void)context_ptr;
 	if (signum != SIGUSR1)
 	{
 		return;
@@ -381,15 +382,15 @@ static void sigusr1_handler(int signum, siginfo_t* info, void* context_ptr)
 	pid_t child_pid = info->si_pid;
 	int status;
 
-	// waitpid(child_pid, &status, 0);
+	waitpid(child_pid, &status, 0);
 
-	// char buf[12];
-	// int len;
-	// char* start;
-	// itoa(buf, 12, info->si_pid, &len, &start);
-	// write(STDERR_FILENO, "Потомок ", sizeof("Потомок "));
-	// write(STDERR_FILENO, start, len);
-	// write(STDERR_FILENO, " завершился\n", sizeof(" завершился\n"));
+	char buf[12];
+	int len;
+	char* start;
+	itoa(buf, 12, info->si_pid, &len, &start);
+	write(STDERR_FILENO, "Потомок ", sizeof("Потомок "));
+	write(STDERR_FILENO, start, len);
+	write(STDERR_FILENO, " завершился\n", sizeof(" завершился\n"));
 }
 
 void setup_executor()

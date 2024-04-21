@@ -9,6 +9,14 @@
 
 #define ASSERT_IS_COMMAND(expr) (assert((expr)->type == EXPR_TYPE_COMMAND))
 
+/* Отображаем названия функций для получения информации о стеке вызовов при
+ * утечке (utils/heap_check) */
+#ifdef LEAK_CHECK
+#define internal
+#else
+#define internal static
+#endif
+
 typedef struct exe_build_state_t
 {
 	/** Название исполняемого файла */
@@ -19,26 +27,20 @@ typedef struct exe_build_state_t
 	int args_count;
 } exe_state_t;
 
-static void exe_state_init(exe_state_t* state)
+internal void exe_state_init(exe_state_t* state)
 {
 	state->args_count = 0;
 	state->args = NULL;
 	state->exe = NULL;
 }
 
-/** Проверить, что указанное состояние проинициализировано значениями */
-static bool exe_state_is_init(exe_state_t* state)
-{
-	return state->exe != NULL;
-}
-
-static void exe_state_update(exe_state_t* state, struct command_raw* cmd)
+internal void exe_state_update(exe_state_t* state, struct command_raw* cmd)
 {
 	state->exe = strdup(cmd->exe);
 	if (0 < cmd->arg_count)
 	{
 		char** args = malloc(sizeof(char*) * cmd->arg_count);
-		for (int i = 0; i < cmd->arg_count; i++)
+		for (uint32_t i = 0; i < cmd->arg_count; i++)
 		{
 			args[i] = strdup(cmd->args[i]);
 		}
@@ -53,7 +55,7 @@ static void exe_state_update(exe_state_t* state, struct command_raw* cmd)
 	}
 }
 
-static void exe_state_build(exe_state_t* state, exe_t* exe)
+internal void exe_state_build(exe_state_t* state, exe_t* exe)
 {
 	/* Эти значения уже скопированы, поэтому просто отдаем */
 	exe->name = state->exe;
@@ -61,8 +63,9 @@ static void exe_state_build(exe_state_t* state, exe_t* exe)
 	exe->args_count = state->args_count;
 }
 
-static void exe_state_free(exe_state_t* s)
+internal void exe_state_free(exe_state_t* s)
 {
+    /* Выделенные strdup строки удаляем уже в команде, чтобы уменьшить общую работу */
 	s->args = NULL;
 	s->args_count = 0;
 	s->exe = NULL;
@@ -83,7 +86,7 @@ typedef struct pipeline_build_state
 	int capacity;
 } pipeline_state_t;
 
-static void pipeline_state_init(pipeline_state_t* state, bool is_and)
+internal void pipeline_state_init(pipeline_state_t* state, bool is_and)
 {
 	state->and = is_and;
 	state->exes = NULL;
@@ -91,31 +94,31 @@ static void pipeline_state_init(pipeline_state_t* state, bool is_and)
 	state->size = 0;
 }
 
-static void pipeline_state_add_command(pipeline_state_t* state, struct expr* e)
+internal void pipeline_state_add_command(pipeline_state_t* state,
+                                         struct expr* e)
 {
 	ASSERT_IS_COMMAND(e);
 
-	/* Проверяем место для массива state->other */
-	int insert_index = state->size;
-	if (state->exes == NULL)
+	if (state->capacity == 0)
 	{
 		state->exes = (exe_state_t*)malloc(sizeof(exe_state_t) * 1);
 		state->capacity = 1;
 	}
 	else if (state->capacity == state->size)
 	{
-		state->exes = (exe_state_t*)realloc(state->exes, sizeof(exe_state_t) * state->capacity * 2);
 		state->capacity *= 2;
+		state->exes = (exe_state_t*)realloc(
+		    state->exes, sizeof(exe_state_t) * state->capacity);
 	}
 
 	/* Добавляем новый exe в наш массив */
-	exe_state_init(state->exes + insert_index);
-	exe_state_update(state->exes + insert_index, &e->cmd);
+	exe_state_init(state->exes + state->size);
+	exe_state_update(state->exes + state->size, &e->cmd);
 	++state->size;
 }
 
-static void pipeline_state_build_cond(pipeline_state_t* state,
-                                      pipeline_condition_t* pc)
+internal void pipeline_state_build_cond(pipeline_state_t* state,
+                                        pipeline_condition_t* pc)
 {
 	assert(0 < state->size);
 	assert(state->exes != NULL);
@@ -131,16 +134,17 @@ static void pipeline_state_build_cond(pipeline_state_t* state,
 		return;
 	}
 
-	exe_t* piped = (exe_t*)malloc(sizeof(exe_t) * state->size);
-	for (size_t i = 0; i < state->size - 1; i++)
+	exe_t* piped = (exe_t*)malloc(sizeof(exe_t) * (state->size - 1));
+	for (int i = 0; i < state->size - 1; i++)
 	{
 		exe_state_build(state->exes + i, piped + i);
 	}
 	pc->pipeline.piped = piped;
-	pc->pipeline.piped_count = state->size;
+	pc->pipeline.piped_count = (state->size - 1);
 }
 
-static void pipeline_state_build_no_cond(pipeline_state_t* state, pipeline_t* p)
+internal void pipeline_state_build_no_cond(pipeline_state_t* state,
+                                           pipeline_t* p)
 {
 	exe_state_build(state->exes + (state->size - 1), &p->last);
 
@@ -153,7 +157,7 @@ static void pipeline_state_build_no_cond(pipeline_state_t* state, pipeline_t* p)
 
 	int piped_count = state->size - 1;
 	exe_t* piped = (exe_t*)malloc(sizeof(exe_t) * piped_count);
-	for (size_t i = 0; i < piped_count; i++)
+	for (int i = 0; i < piped_count; i++)
 	{
 		exe_state_build(state->exes + i, piped + i);
 	}
@@ -161,12 +165,12 @@ static void pipeline_state_build_no_cond(pipeline_state_t* state, pipeline_t* p)
 	p->piped_count = piped_count;
 }
 
-static void pipeline_state_free(pipeline_state_t* ps)
+internal void pipeline_state_free(pipeline_state_t* ps)
 {
 	ps->and = false;
 	if (ps->exes != NULL)
 	{
-		for (size_t i = 0; i < ps->size; i++)
+		for (int i = 0; i < ps->size; i++)
 		{
 			exe_state_free(ps->exes + i);
 		}
@@ -195,7 +199,7 @@ typedef struct command_build_state
 	int pipelines_cap;
 } build_state_t;
 
-static void build_state_init(build_state_t* state, struct command_line* line)
+internal void build_state_init(build_state_t* state, struct command_line* line)
 {
 	state->is_bg = line->is_background;
 	if (line->out_type == OUTPUT_TYPE_STDOUT)
@@ -215,15 +219,16 @@ static void build_state_init(build_state_t* state, struct command_line* line)
 	state->pipelines_count = 0;
 }
 
-static void build_state_free(build_state_t* bs)
+internal void build_state_free(build_state_t* bs)
 {
 	bs->append = false;
 	bs->filename = NULL;
 	bs->is_bg = false;
 
+	pipeline_state_free(&bs->first);
 	if (bs->pipelines != NULL)
 	{
-		for (size_t i = 0; i < bs->pipelines_count; i++)
+		for (int i = 0; i < bs->pipelines_count; i++)
 		{
 			pipeline_state_free(bs->pipelines + i);
 		}
@@ -236,9 +241,9 @@ static void build_state_free(build_state_t* bs)
 }
 
 /* Начать новый пайплайн, который запускается с указанным условием */
-static void build_state_start_pipeline(build_state_t* state,
-                                       struct expr* e,
-                                       bool is_and)
+internal void build_state_start_pipeline(build_state_t* state,
+                                         struct expr* e,
+                                         bool is_and)
 {
 	ASSERT_IS_COMMAND(e);
 
@@ -265,7 +270,7 @@ static void build_state_start_pipeline(build_state_t* state,
  * Добавить команду на прямую - cmd ...
  * Эта функция должна вызываться самой первой в списке выражений
  */
-static void build_state_add_command(build_state_t* state, struct expr* e)
+internal void build_state_add_command(build_state_t* state, struct expr* e)
 {
 	/* Проверяем, что это первый вызов */
 	ASSERT_IS_COMMAND(e);
@@ -276,7 +281,7 @@ static void build_state_add_command(build_state_t* state, struct expr* e)
 
 /* Добавить новую команду, которая начинается сразу после пайплайна - ... | cmd
  * ... */
-static void build_state_add_pipe(build_state_t* state, struct expr* e)
+internal void build_state_add_pipe(build_state_t* state, struct expr* e)
 {
 	pipeline_state_t* p = 0 < state->pipelines_count
 	                          ? state->pipelines + state->pipelines_count - 1
@@ -285,7 +290,7 @@ static void build_state_add_pipe(build_state_t* state, struct expr* e)
 }
 
 /* Создать команду из собранных выражений */
-static void build_state_build(build_state_t* state, command_t* cmd)
+internal void build_state_build(build_state_t* state, command_t* cmd)
 {
 	cmd->append = state->append;
 	cmd->is_bg = state->is_bg;
@@ -296,7 +301,7 @@ static void build_state_build(build_state_t* state, command_t* cmd)
 	{
 		pipeline_condition_t* pcs = (pipeline_condition_t*)malloc(
 		    sizeof(pipeline_condition_t) * state->pipelines_count);
-		for (size_t i = 0; i < state->pipelines_count; i++)
+		for (int i = 0; i < state->pipelines_count; i++)
 		{
 			pipeline_state_build_cond(state->pipelines + i, pcs + i);
 		}
@@ -350,9 +355,9 @@ int parse_command(struct command_line* line, command_t* command)
 	return 0;
 }
 
-static void exe_free(exe_t* e)
+internal void exe_free(exe_t* e)
 {
-	for (size_t i = 0; i < e->args_count; i++)
+	for (int i = 0; i < e->args_count; i++)
 	{
 		free((void*)e->args[i]);
 	}
@@ -363,12 +368,12 @@ static void exe_free(exe_t* e)
 	e->name = NULL;
 }
 
-static void pipeline_free(pipeline_t* p)
+internal void pipeline_free(pipeline_t* p)
 {
 	exe_free(&p->last);
 	if (p->piped != NULL)
 	{
-		for (size_t i = 0; i < p->piped_count; i++)
+		for (int i = 0; i < p->piped_count; i++)
 		{
 			exe_free(p->piped + i);
 		}
@@ -380,15 +385,15 @@ static void pipeline_free(pipeline_t* p)
 void free_command(command_t* cmd)
 {
 	cmd->append = false;
-	free((char*)cmd->redirect_filename);
 	cmd->is_bg = false;
+	free((void*)cmd->redirect_filename);
 
 	pipeline_free(&cmd->first);
 	if (cmd->chained != NULL)
 	{
 		assert(0 < cmd->chained_count);
 
-		for (size_t i = 0; i < cmd->chained_count; i++)
+		for (int i = 0; i < cmd->chained_count; i++)
 		{
 			pipeline_condition_t* pc = cmd->chained + i;
 			pc->is_and = false;

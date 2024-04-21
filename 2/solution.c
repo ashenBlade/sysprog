@@ -67,17 +67,6 @@ __attribute__((unused)) static void print_command_line_parsed(
 	}
 }
 
-static void process_command_line(struct command_line* line)
-{
-	command_t command;
-	if (parse_command(line, &command) == -1)
-	{
-		return;
-	}
-
-	exec_command(&command);
-}
-
 int main(void)
 {
 	const size_t buf_size = 1024;
