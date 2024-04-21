@@ -65,7 +65,8 @@ internal void exe_state_build(exe_state_t* state, exe_t* exe)
 
 internal void exe_state_free(exe_state_t* s)
 {
-    /* Выделенные strdup строки удаляем уже в команде, чтобы уменьшить общую работу */
+	/* Выделенные strdup строки удаляем уже в команде, чтобы уменьшить общую
+	 * работу */
 	s->args = NULL;
 	s->args_count = 0;
 	s->exe = NULL;
@@ -256,8 +257,9 @@ internal void build_state_start_pipeline(build_state_t* state,
 	}
 	else if (state->pipelines_cap == state->pipelines_count)
 	{
-		state->pipelines = (pipeline_state_t*)realloc(state->pipelines,
-		                                              state->pipelines_cap * 2);
+		state->pipelines = (pipeline_state_t*)realloc(
+		    state->pipelines,
+		    sizeof(pipeline_state_t) * state->pipelines_cap * 2);
 		state->pipelines_cap *= 2;
 	}
 
