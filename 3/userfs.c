@@ -12,32 +12,73 @@ enum
     MAX_FILE_SIZE = 1024 * 1024 * 100,
 };
 
+/*
+ * Проверка на то, что указанное число кратно размеру блока.
+ * Необходимо во время нахождения очередного блока при записи
+ */
+#define IS_MULTIPLE_OF_BLOCKSIZE(size) (((size) & (BLOCK_SIZE - 1)) == 0)
+
 /** Global error code. Set from any function on any error. */
 static enum ufs_error_code ufs_error_code = UFS_ERR_NO_ERR;
 
-struct block
+typedef struct block
 {
     /** Block memory. */
-    char *memory;
+    char *data;
     /** How many bytes are occupied. */
-    int occupied;
+    size_t occupied;
     /** Next block in the file. */
     struct block *next;
     /** Previous block in the file. */
     struct block *prev;
 
     /* PUT HERE OTHER MEMBERS */
-};
+} ublock_t;
+
+static void
+ublock_init(ublock_t *block)
+{
+    block->data = (char *)calloc(BLOCK_SIZE, sizeof(char));
+    block->occupied = 0;
+    block->next = NULL;
+    block->prev = NULL;
+}
+
+static void
+ublock_delete(ublock_t *block)
+{
+    free(block->data);
+    block->data = NULL;
+    block->occupied = 0;
+    block->next = NULL;
+    block->prev = NULL;
+}
+
+static size_t
+ublock_write(ublock_t *block, const void *data, size_t length)
+{
+    if (block->occupied == BLOCK_SIZE)
+    {
+        return 0;
+    }
+
+    size_t to_write = BLOCK_SIZE - block->occupied < length
+                          ? BLOCK_SIZE - block->occupied
+                          : length;
+    memcpy(block->data + block->occupied, data, to_write);
+    block->occupied += to_write;
+    return to_write;
+}
 
 typedef struct file
 {
     /** Double-linked list of file blocks. */
-    struct block *block_list;
+    ublock_t *block_list;
     /**
      * Last block in the list above for fast access to the end
      * of file.
      */
-    struct block *last_block;
+    ublock_t *last_block;
     /** How many file descriptors are opened on the file. */
     int refs;
     /** File name. */
@@ -46,8 +87,10 @@ typedef struct file
     struct file *next;
     struct file *prev;
 
-    /** Удален ли файл*/
+    /** Удален ли файл */
     bool deleted;
+    /** Общий размер файла */
+    size_t size;
 } ufile_t;
 
 static void
@@ -60,13 +103,151 @@ ufile_init(ufile_t *file, const char *filename)
     file->prev = NULL;
     file->refs = 0;
     file->deleted = false;
+    file->size = 0;
 }
 
 static void
 ufile_delete(ufile_t *file)
 {
     free(file->name);
-    /* TODO */
+    ublock_t *b = file->block_list;
+    while (b != NULL)
+    {
+        ublock_delete(b);
+        b = b->next;
+    }
+    file->block_list = NULL;
+    file->last_block = NULL;
+    ufile_t *next = file->next,
+            *prev = file->prev;
+    if (next != NULL)
+    {
+        next->prev = prev;
+    }
+
+    if (prev != NULL)
+    {
+        prev->next = next;
+    }
+
+    file->size = 0;
+    file->refs = 0;
+    file->deleted = true;
+}
+
+static ublock_t *
+ufile_get_block_pos(ufile_t *file, size_t pos)
+{
+    assert(pos < file->size);
+    size_t file_blocks_count = file->size / BLOCK_SIZE;
+    size_t pos_block_no = pos / BLOCK_SIZE;
+    if (file_blocks_count == pos_block_no)
+    {
+        return file->last_block;
+    }
+    /*
+     * В зависимости от номера необходимого блока начинаем обход списка:
+     * возможно, поиск с конца будет быстрее
+     */
+    ublock_t *target;
+    if (pos_block_no <= file_blocks_count / 2)
+    {
+        /* Начинаем с начала списка */
+        target = file->block_list;
+        for (size_t i = 0; i < pos_block_no; i++)
+        {
+            target = target->next;
+        }
+    }
+    else
+    {
+        /* Начинаем с конца */
+        target = file->last_block;
+        for (int i = file_blocks_count - pos_block_no; i >= 0; i--)
+        {
+            target = target->prev;
+        }
+    }
+    return target;
+}
+
+static ssize_t
+ufile_write(ufile_t *file, size_t pos, const char *data, size_t size)
+{
+    assert(pos <= file->size && "Проверка позиции должна осуществляться раньше");
+
+    /* Предварительно проверим ограничение на максимальный размер файла */
+    size_t new_size = file->size + size;
+    if (MAX_FILE_SIZE < new_size)
+    {
+        ufs_error_code = UFS_ERR_NO_MEM;
+        return -1;
+    }
+
+    ublock_t *block;
+    if (pos == file->size && IS_MULTIPLE_OF_BLOCKSIZE(pos))
+    {
+        /*
+         * Писать надо с конца файла и при этом указанная позиция кратна размеру блока.
+         * Это значит, что необходимо начать новый блок.
+         */
+        ublock_t *new_block = (ublock_t *)calloc(1, sizeof(ublock_t));
+        ublock_init(new_block);
+        if (file->block_list == NULL)
+        {
+            file->block_list = new_block;
+            file->last_block = new_block;
+        }
+        else
+        {
+            new_block->prev = file->last_block;
+            file->last_block->next = new_block;
+        }
+
+        block = new_block;
+    }
+    else
+    {
+        /* Необходимо найти существующий блок по смещению */
+        block = ufile_get_block_pos(file, pos);
+    }
+
+    /*
+     * Шаги:
+     * 1. Ищем нужный блок - итерируемся (+ проверяем не NULL)
+     * 1.1. Удаляем оставшуюся дальше цепочку
+     * 2. В цикле:
+     *      1. Пишем часть данных буфера
+     *      2. Если конец (left == 0) - выходим из цикла
+     *      3. Создаем новый блок и цепляем к концу текущего
+     * 3. Обновляем last_block
+     */
+
+    size_t written = 0;
+    while (written < size)
+    {
+        size_t cur_written = ublock_write(block, data + written, size - written);
+        written += cur_written;
+        if (written < size || cur_written == 0)
+        {
+            ublock_t *next = block->next;
+            if (next == NULL)
+            {
+                next = (ublock_t *)calloc(1, sizeof(ublock_t));
+                ublock_init(next);
+                next->prev = block;
+                block->next = next;
+                file->last_block = next;
+            }
+            else
+            {
+                block = next;
+            }
+        }
+    }
+
+    file->size += size;
+    return (ssize_t) written;
 }
 
 /** List of all files. */
@@ -75,9 +256,7 @@ static ufile_t *ufile_list = NULL;
 typedef struct filedesc
 {
     ufile_t *file;
-
-    /* PUT HERE OTHER MEMBERS */
-    int pos;
+    size_t pos;
 } ufd_t;
 
 static void
@@ -100,6 +279,25 @@ ufd_close(ufd_t *ufd)
 
     ufd->file = NULL;
     ufd->pos = 0;
+}
+
+static ssize_t
+ufd_write(ufd_t *ufd, const char *data, size_t size)
+{
+    /* Проверка на изменение размера файла */
+    if (ufd->file->size < ufd->pos)
+    {
+        ufd->pos = ufd->file->size;
+    }
+
+    ssize_t written = ufile_write(ufd->file, ufd->pos, data, size);
+    if (written == -1)
+    {
+        return -1;
+    }
+
+    ufd->pos += written;
+    return written;
 }
 
 /**
@@ -247,12 +445,19 @@ search_ufd(int fd)
 ssize_t
 ufs_write(int fd, const char *buf, size_t size)
 {
-    /* IMPLEMENT THIS FUNCTION */
-    (void)fd;
-    (void)buf;
-    (void)size;
-    ufs_error_code = UFS_ERR_NOT_IMPLEMENTED;
-    return -1;
+    ufd_t *ufd = search_ufd(fd);
+    if (ufd == NULL || buf == NULL)
+    {
+        ufs_error_code = UFS_ERR_NO_FILE;
+        return -1;
+    }
+
+    if (size == 0)
+    {
+        return 0;
+    }
+
+    return ufd_write(ufd, buf, size);
 }
 
 ssize_t
