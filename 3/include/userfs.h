@@ -54,6 +54,12 @@ enum open_flags {
 #endif
 };
 
+enum ufs_constraints
+{
+    /** Максимальный размер файла */
+    UFS_CONSTR_MAX_FILE_SIZE = 1024 * 100,
+};
+
 /** Possible errors from all functions. */
 enum ufs_error_code {
 	UFS_ERR_NO_ERR = 0,

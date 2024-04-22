@@ -6,10 +6,9 @@
 
 #include "userfs.h"
 
-enum
+enum ufs_config
 {
-    BLOCK_SIZE = 512,
-    MAX_FILE_SIZE = 1024 * 1024 * 100,
+    BLOCK_SIZE = 512
 };
 
 /*
@@ -142,18 +141,6 @@ ufile_delete(ufile_t *file)
     }
     file->block_list = NULL;
     file->last_block = NULL;
-    ufile_t *next = file->next,
-            *prev = file->prev;
-    if (next != NULL)
-    {
-        next->prev = prev;
-    }
-
-    if (prev != NULL)
-    {
-        prev->next = next;
-    }
-
     file->size = 0;
     file->refs = 0;
     file->deleted = true;
@@ -202,7 +189,7 @@ ufile_write(ufile_t *file, size_t pos, const char *data, size_t size)
     assert(pos <= file->size && "Проверка позиции должна осуществляться раньше");
 
     /* Предварительно проверим ограничение на максимальный размер файла */
-    if (MAX_FILE_SIZE < pos + size)
+    if (UFS_CONSTR_MAX_FILE_SIZE < pos + size)
     {
         ufs_error_code = UFS_ERR_NO_MEM;
         return -1;
@@ -283,6 +270,52 @@ ufile_write(ufile_t *file, size_t pos, const char *data, size_t size)
 /** List of all files. */
 static ufile_t *ufile_list = NULL;
 
+/** 
+ * Выполнить полное удаление файла.
+ * Замечание: все файловые дескрипторы должны быть закрыты
+ */
+static void 
+ufile_list_remove(ufile_t *file)
+{
+    assert(file->refs == 0);
+    ufile_t *next = file->next,
+            *prev = file->prev;
+
+    if (next != NULL)
+    {
+        next->prev = prev;
+    }
+
+    if (prev != NULL)
+    {
+        prev->next = next;
+    }
+
+    if (file == ufile_list)
+    {
+        ufile_list = next;
+    }
+
+    ufile_delete(file);
+    free(file);
+}
+
+static ufile_t *
+ufile_list_search_existing(const char *filename)
+{
+    ufile_t *file = ufile_list;
+    while (file != NULL)
+    {
+        if (strcmp(file->name, filename) == 0 && !file->deleted)
+        {
+            return file;
+        }
+        file = file->next;
+    }
+
+    return NULL;
+}
+
 typedef struct filedesc
 {
     ufile_t *file;
@@ -304,7 +337,7 @@ ufd_close(ufd_t *ufd)
 
     if (left_refs == 0 && ufd->file->deleted)
     {
-        ufile_delete(ufd->file);
+        ufile_list_remove(ufd->file);
     }
 
     ufd->file = NULL;
@@ -385,28 +418,8 @@ ufs_errno()
     return ufs_error_code;
 }
 
-static ufile_t *
-search_existing_file(const char *filename)
-{
-    if (ufile_list == NULL)
-    {
-        return NULL;
-    }
-
-    struct file *cur = ufile_list;
-    do
-    {
-        if (strcmp(cur->name, filename) == 0 && !cur->deleted)
-        {
-            return cur;
-        }
-        cur = cur->next;
-    } while (cur != NULL);
-    return NULL;
-}
-
 static void
-file_list_add(ufile_t *file)
+ufile_list_add(ufile_t *file)
 {
     if (ufile_list == NULL)
     {
@@ -472,21 +485,17 @@ create_file_desc(ufile_t *file)
 
 int ufs_open(const char *filename, int flags)
 {
-    /*
-     * 1. Нахождение файла по его имени среди всех
-     * 2. Создание при необходимости (flags)
-     * 3. Получение дескриптора (создание)
-     * 4. Увеличение счетчика указателей на файл
-     */
+    /* Находим первый не удаленный файл */
+    ufile_t *file = ufile_list_search_existing(filename);
 
-    ufile_t *file = search_existing_file(filename);
+    /* Создаем новый при необходимости */
     if (file == NULL)
     {
-        if (flags && UFS_CREATE)
+        if (flags & UFS_CREATE)
         {
             file = (ufile_t *)calloc(1, sizeof(ufile_t));
             ufile_init(file, filename);
-            file_list_add(file);
+            ufile_list_add(file);
         }
         else
         {
@@ -555,21 +564,6 @@ int ufs_close(int fd)
     return 0;
 }
 
-static ufile_t *
-search_ufile(const char *filename)
-{
-    ufile_t *cur = ufile_list;
-    while (cur != NULL)
-    {
-        if (strcmp(cur->name, filename) == 0)
-        {
-            return cur;
-        }
-        cur = cur->next;
-    }
-
-    return NULL;
-}
 
 int ufs_delete(const char *filename)
 {
@@ -578,7 +572,7 @@ int ufs_delete(const char *filename)
         return -1;
     }
 
-    ufile_t *file = search_ufile(filename);
+    ufile_t *file = ufile_list_search_existing(filename);
     if (file->deleted)
     {
         /* Уже удален */
@@ -586,24 +580,10 @@ int ufs_delete(const char *filename)
     }
 
     file->deleted = true;
-    ufile_t *next = file->next,
-            *prev = file->prev;
-    if (next != NULL)
-    {
-        next->prev = prev;
-    }
-
-    if (prev != NULL)
-    {
-        prev->next = next;
-    }
-
     if (file->refs == 0)
     {
-        ufile_delete(file);
-        free(file);
+        ufile_list_remove(file);
     }
-
     return 0;
 }
 

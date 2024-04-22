@@ -1,8 +1,10 @@
-#include "userfs.h"
-#include "unit.h"
 #include <assert.h>
 #include <limits.h>
 #include <string.h>
+
+
+#include "userfs.h"
+#include "unit.h"
 
 static void
 test_open(void)
@@ -312,11 +314,14 @@ test_max_file_size(void)
 	int fd = ufs_open("file", UFS_CREATE);
 	unit_fail_if(fd == -1);
     
-	int buf_size = 1024 * 1024;
-	char *buf = (char *) malloc(buf_size);
-	for (int i = 0; i < buf_size; ++i)
+    const int bufs_count = 100;
+    const int buf_size = UFS_CONSTR_MAX_FILE_SIZE / bufs_count;
+    assert(bufs_count * buf_size == UFS_CONSTR_MAX_FILE_SIZE);
+
+    char *buf = (char *)malloc(buf_size);
+    for (int i = 0; i < buf_size; ++i)
 		buf[i] = 'a' + i % 26;
-	for (int i = 0; i < 100; ++i) {
+	for (int i = 0; i < bufs_count; ++i) {
 		ssize_t rc = ufs_write(fd, buf, buf_size);
 		unit_fail_if(rc != buf_size);
 	}
@@ -332,7 +337,7 @@ test_max_file_size(void)
 	fd = ufs_open("file", 0);
 	unit_fail_if(fd == -1);
 	char *buf2 = (char *) malloc(buf_size);
-	for (int i = 0; i < 100; ++i) {
+ 	for (int i = 0; i < bufs_count; ++i) {
 		ssize_t rc = ufs_read(fd, buf2, buf_size);
 		unit_fail_if(rc != buf_size);
 		unit_fail_if(memcmp(buf2, buf, buf_size) != 0);
