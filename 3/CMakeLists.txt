@@ -16,3 +16,8 @@ add_executable(${TESTS_PROJECT}
     test.c)
 target_link_libraries(${TESTS_PROJECT} ${PROJECT_NAME})
 target_include_directories(${TESTS_PROJECT} PRIVATE include ../utils)
+
+if(NEED_OPEN_FLAGS)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE NEED_OPEN_FLAGS)
+    target_compile_definitions(${TESTS_PROJECT} PRIVATE NEED_OPEN_FLAGS)
+endif(NEED_OPEN_FLAGS)

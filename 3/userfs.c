@@ -61,9 +61,7 @@ ublock_write(ublock_t *block, size_t pos, const char *data, size_t length)
     {
         return 0;
     }
-    /*
-     * TODO: проблема - записываю в конец
-     */
+
     size_t to_write = BLOCK_SIZE - pos < length
                           ? BLOCK_SIZE - pos
                           : length;
@@ -316,18 +314,39 @@ ufile_list_search_existing(const char *filename)
     return NULL;
 }
 
+
+
 typedef struct filedesc
 {
+    /** Указатель на рабочий файл */
     ufile_t *file;
+    /** Позиция в файле, с которой мы работаем */
     size_t pos;
+    /** Флаги разрешений */
+    enum open_flags flags;
 } ufd_t;
 
+#ifdef NEED_OPEN_FLAGS
+
+#define can_write(flags) (((flags) & UFS_WRITE_ONLY) != 0)
+#define can_read(flags) (((flags) & UFS_READ_ONLY) != 0)
+#define setup_rw_permissions(flags) (((flags) & UFS_READ_WRITE) == 0 ? (UFS_READ_WRITE | (flags)) : (flags))
+
+#else
+
+#define can_write(flags) (true)
+#define can_read(flags) (true)
+#define setup_rw_permissions(flags) (flags)
+
+#endif
+
 static void
-ufd_init(ufd_t *fd, ufile_t *file)
+ufd_init(ufd_t *fd, ufile_t *file, enum open_flags flags)
 {
     ++file->refs;
     fd->file = file;
     fd->pos = 0;
+    fd->flags = setup_rw_permissions(flags);
 }
 
 static void
@@ -354,9 +373,18 @@ ufd_adjust_pos(ufd_t *ufd)
     }
 }
 
+
 static ssize_t
 ufd_write(ufd_t *ufd, const char *data, size_t size)
 {
+#ifdef NEED_OPEN_FLAGS
+    if (!can_write(ufd->flags))
+    {
+        ufs_error_code = UFS_ERR_NO_PERMISSION;
+        return -1;
+    }
+#endif
+
     ufd_adjust_pos(ufd);
 
     ssize_t written = ufile_write(ufd->file, ufd->pos, data, size);
@@ -372,6 +400,14 @@ ufd_write(ufd_t *ufd, const char *data, size_t size)
 static size_t
 ufd_read(ufd_t *ufd, char *buf, size_t length)
 {
+#ifdef NEED_OPEN_FLAGS
+    if (!can_read(ufd->flags))
+    {
+        ufs_error_code = UFS_ERR_NO_PERMISSION;
+        return -1;
+    }
+#endif
+
     if (length == 0)
     {
         return 0;
@@ -438,7 +474,7 @@ ufile_list_add(ufile_t *file)
 }
 
 static int
-create_file_desc(ufile_t *file)
+create_file_desc(ufile_t *file, enum open_flags flags)
 {
     assert(file != NULL);
 
@@ -478,7 +514,7 @@ create_file_desc(ufile_t *file)
     }
 
     ufd_t *ufd = (ufd_t *)calloc(1, sizeof(ufd_t));
-    ufd_init(ufd, file);
+    ufd_init(ufd, file, flags);
     ufds[fd] = ufd;
     return fd;
 }
@@ -504,7 +540,9 @@ int ufs_open(const char *filename, int flags)
         }
     }
 
-    return create_file_desc(file);
+    
+
+    return create_file_desc(file, (enum open_flags)flags);
 }
 
 static ufd_t *

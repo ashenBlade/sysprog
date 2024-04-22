@@ -49,7 +49,7 @@ enum open_flags {
 	 * With this flag it is allowed to both read and write
 	 * into the file.
 	 */
-	UFS_READ_WRITE = 8,
+	UFS_READ_WRITE = UFS_READ_ONLY | UFS_WRITE_ONLY,
 
 #endif
 };

@@ -124,7 +124,7 @@ test_io(void)
 	unit_check(ufs_write(fd1, "123###", 3) == 3,
 		"data (only needed) is written");
     /* 
-     * file: '123' 
+     * file: '123'
      */
 	unit_check(ufs_read(fd2, buffer, sizeof(buffer)) == 3, "data is read");
 	unit_check(memcmp(buffer, "123", 3) == 0, "the same data");
