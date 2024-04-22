@@ -21,3 +21,8 @@ if(NEED_OPEN_FLAGS)
     target_compile_definitions(${PROJECT_NAME} PRIVATE NEED_OPEN_FLAGS)
     target_compile_definitions(${TESTS_PROJECT} PRIVATE NEED_OPEN_FLAGS)
 endif(NEED_OPEN_FLAGS)
+
+if(NEED_RESIZE)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE NEED_OPEN_FLAGS)
+    target_compile_definitions(${TESTS_PROJECT} PRIVATE NEED_OPEN_FLAGS)
+endif(NEED_RESIZE)

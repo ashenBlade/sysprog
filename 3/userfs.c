@@ -43,6 +43,14 @@ ublock_init(ublock_t *block)
     block->prev = NULL;
 }
 
+static ublock_t *
+ublock_new()
+{
+    ublock_t *block = (ublock_t *)calloc(1, sizeof(ublock_t));
+    ublock_init(block);
+    return block;
+}
+
 static void
 ublock_delete(ublock_t *block)
 {
@@ -90,6 +98,36 @@ ublock_read(ublock_t *block, size_t pos, char *buf, size_t length)
     memcpy(buf, block->data + pos, to_read);
     return to_read;
 }
+
+#ifdef NEED_RESIZE
+
+static void
+ublock_resize(ublock_t *block, size_t size)
+{
+    assert(size <= BLOCK_SIZE);
+    if (block->occupied == size)
+    {
+        return;
+    }
+
+    char *start;
+    size_t length;
+    if (size < block->occupied)
+    {
+        start = block->data + size;
+        length = block->occupied - size;
+    }
+    else
+    {
+        start = block->data + block->occupied;
+        length = size - block->occupied;
+    }
+
+    memset((void *)start, 0, length);
+    block->occupied = size;
+}
+
+#endif
 
 typedef struct file
 {
@@ -200,8 +238,7 @@ ufile_write(ufile_t *file, size_t pos, const char *data, size_t size)
          * Писать надо с конца файла и при этом указанная позиция кратна размеру блока.
          * Это значит, что необходимо начать новый блок.
          */
-        ublock_t *new_block = (ublock_t *)calloc(1, sizeof(ublock_t));
-        ublock_init(new_block);
+        ublock_t *new_block = ublock_new();
         if (file->block_list == NULL)
         {
             file->block_list = new_block;
@@ -220,17 +257,6 @@ ufile_write(ufile_t *file, size_t pos, const char *data, size_t size)
         /* Необходимо найти существующий блок по смещению */
         block = ufile_get_block_pos(file, pos);
     }
-
-    /*
-     * Шаги:
-     * 1. Ищем нужный блок - итерируемся (+ проверяем не NULL)
-     * 1.1. Удаляем оставшуюся дальше цепочку
-     * 2. В цикле:
-     *      1. Пишем часть данных буфера
-     *      2. Если конец (left == 0) - выходим из цикла
-     *      3. Создаем новый блок и цепляем к концу текущего
-     * 3. Обновляем last_block
-     */
 
     size_t written = 0;
     /* Вначале, записываем в конец блока, а после - начинаем с начала */
@@ -268,11 +294,11 @@ ufile_write(ufile_t *file, size_t pos, const char *data, size_t size)
 /** List of all files. */
 static ufile_t *ufile_list = NULL;
 
-/** 
+/**
  * Выполнить полное удаление файла.
  * Замечание: все файловые дескрипторы должны быть закрыты
  */
-static void 
+static void
 ufile_list_remove(ufile_t *file)
 {
     assert(file->refs == 0);
@@ -314,7 +340,78 @@ ufile_list_search_existing(const char *filename)
     return NULL;
 }
 
+#ifdef NEED_RESIZE
 
+static int
+ufile_resize(ufile_t *file, size_t size)
+{
+    if (file->size == size)
+    {
+        return 0;
+    }
+
+    if (UFS_CONSTR_MAX_FILE_SIZE < size)
+    {
+        ufs_error_code = UFS_ERR_NO_MEM;
+        return -1;
+    }
+
+    if (file->size < size)
+    {
+        if (file->block_list == NULL)
+        {
+            ublock_t *first_block = ublock_new();
+            file->block_list = first_block;
+            file->last_block = first_block;
+        }
+
+        int fill_blocks_count = file->size / BLOCK_SIZE;
+        ublock_t *last_block = file->last_block;
+
+        for (size_t i = 0; i < fill_blocks_count; i++)
+        {
+            ublock_resize(last_block, BLOCK_SIZE);
+            ublock_t *next_block = ublock_new();
+            next_block->prev = last_block;
+            last_block->next = next_block;
+            last_block = next_block;
+        }
+
+        size_t last_block_size = size % BLOCK_SIZE;
+        if (last_block_size != 0)
+        {
+            ublock_t *new_last_block = ublock_new();
+            ublock_resize(new_last_block, last_block_size);
+            new_last_block->prev = last_block;
+            last_block->next = new_last_block;
+        }
+
+        file->last_block = last_block;
+        file->size = size;
+    }
+    else /* size < file->size */
+    {
+        ublock_t *new_last_block = ufile_get_block_pos(file, size);
+        ublock_resize(new_last_block, size % BLOCK_SIZE);
+
+        ublock_t *block = new_last_block->next;
+        while (block != NULL)
+        {
+            ublock_t *next = block->next;
+            ublock_delete(block);
+            free(block);
+            block = next;
+        }
+
+        new_last_block->next = NULL;
+        file->last_block = new_last_block;
+        file->size = size;
+    }
+
+    return 0;
+}
+
+#endif
 
 typedef struct filedesc
 {
@@ -372,7 +469,6 @@ ufd_adjust_pos(ufd_t *ufd)
         ufd->pos = ufd->file->size;
     }
 }
-
 
 static ssize_t
 ufd_write(ufd_t *ufd, const char *data, size_t size)
@@ -435,6 +531,34 @@ ufd_read(ufd_t *ufd, char *buf, size_t length)
     ufd->pos += read;
     return read;
 }
+
+#ifdef NEED_RESIZE
+
+static int
+ufd_resize(ufd_t *ufd, size_t size)
+{
+#ifdef NEED_OPEN_FLAGS
+    if (!can_write(ufd->flags))
+    {
+        ufs_error_code = UFS_ERR_NO_PERMISSION;
+        return -1;
+    }
+#endif
+
+    if (ufile_resize(ufd->file, size) == -1)
+    {
+        return -1;
+    }
+
+    if (size < ufd->pos)
+    {
+        ufd->pos = size;
+    }
+    
+    return 0;
+}
+
+#endif
 
 /**
  * An array of file descriptors. When a file descriptor is
@@ -540,8 +664,6 @@ int ufs_open(const char *filename, int flags)
         }
     }
 
-    
-
     return create_file_desc(file, (enum open_flags)flags);
 }
 
@@ -602,6 +724,21 @@ int ufs_close(int fd)
     return 0;
 }
 
+#ifdef NEED_RESIZE
+
+int ufs_resize(int fd, size_t new_size)
+{
+    ufd_t *ufd = search_ufd(fd);
+    if (ufd == NULL)
+    {
+        ufs_error_code = UFS_ERR_NO_FILE;
+        return -1;
+    }
+
+    return ufd_resize(ufd, new_size);
+}
+
+#endif
 
 int ufs_delete(const char *filename)
 {
