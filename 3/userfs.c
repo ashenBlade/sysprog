@@ -55,19 +55,43 @@ ublock_delete(ublock_t *block)
 }
 
 static size_t
-ublock_write(ublock_t *block, const void *data, size_t length)
+ublock_write(ublock_t *block, size_t pos, const char *data, size_t length)
 {
-    if (block->occupied == BLOCK_SIZE)
+    assert(pos <= block->occupied);
+    if (pos == BLOCK_SIZE)
+    {
+        return 0;
+    }
+    /*
+     * TODO: проблема - записываю в конец
+     */
+    size_t to_write = BLOCK_SIZE - pos < length
+                          ? BLOCK_SIZE - pos
+                          : length;
+    memcpy(block->data + pos, data, to_write);
+
+    if (block->occupied < pos + to_write)
+    {
+        block->occupied = pos + to_write;
+    }
+
+    return to_write;
+}
+
+static size_t
+ublock_read(ublock_t *block, size_t pos, char *buf, size_t length)
+{
+    assert(pos <= block->occupied);
+    if (pos == BLOCK_SIZE)
     {
         return 0;
     }
 
-    size_t to_write = BLOCK_SIZE - block->occupied < length
-                          ? BLOCK_SIZE - block->occupied
-                          : length;
-    memcpy(block->data + block->occupied, data, to_write);
-    block->occupied += to_write;
-    return to_write;
+    size_t to_read = block->occupied - pos < length
+                         ? block->occupied - pos
+                         : length;
+    memcpy(buf, block->data + pos, to_read);
+    return to_read;
 }
 
 typedef struct file
@@ -138,7 +162,8 @@ ufile_delete(ufile_t *file)
 static ublock_t *
 ufile_get_block_pos(ufile_t *file, size_t pos)
 {
-    assert(pos < file->size);
+    assert(pos <= file->size);
+
     size_t file_blocks_count = file->size / BLOCK_SIZE;
     size_t pos_block_no = pos / BLOCK_SIZE;
     if (file_blocks_count == pos_block_no)
@@ -177,8 +202,7 @@ ufile_write(ufile_t *file, size_t pos, const char *data, size_t size)
     assert(pos <= file->size && "Проверка позиции должна осуществляться раньше");
 
     /* Предварительно проверим ограничение на максимальный размер файла */
-    size_t new_size = file->size + size;
-    if (MAX_FILE_SIZE < new_size)
+    if (MAX_FILE_SIZE < pos + size)
     {
         ufs_error_code = UFS_ERR_NO_MEM;
         return -1;
@@ -224,9 +248,11 @@ ufile_write(ufile_t *file, size_t pos, const char *data, size_t size)
      */
 
     size_t written = 0;
+    /* Вначале, записываем в конец блока, а после - начинаем с начала */
+    size_t ublock_pos = pos % BLOCK_SIZE;
     while (written < size)
     {
-        size_t cur_written = ublock_write(block, data + written, size - written);
+        size_t cur_written = ublock_write(block, ublock_pos, data + written, size - written);
         written += cur_written;
         if (written < size || cur_written == 0)
         {
@@ -239,15 +265,19 @@ ufile_write(ufile_t *file, size_t pos, const char *data, size_t size)
                 block->next = next;
                 file->last_block = next;
             }
-            else
-            {
-                block = next;
-            }
+
+            block = next;
+            /* Запись в каждый следующий блок начинаем с начала */
+            ublock_pos = 0;
         }
     }
 
-    file->size += size;
-    return (ssize_t) written;
+    if (file->size < (pos + size))
+    {
+        file->size = pos + size;
+    }
+
+    return (ssize_t)written;
 }
 
 /** List of all files. */
@@ -281,14 +311,20 @@ ufd_close(ufd_t *ufd)
     ufd->pos = 0;
 }
 
-static ssize_t
-ufd_write(ufd_t *ufd, const char *data, size_t size)
+/* Проверка на изменение размера файла */
+static void
+ufd_adjust_pos(ufd_t *ufd)
 {
-    /* Проверка на изменение размера файла */
     if (ufd->file->size < ufd->pos)
     {
         ufd->pos = ufd->file->size;
     }
+}
+
+static ssize_t
+ufd_write(ufd_t *ufd, const char *data, size_t size)
+{
+    ufd_adjust_pos(ufd);
 
     ssize_t written = ufile_write(ufd->file, ufd->pos, data, size);
     if (written == -1)
@@ -298,6 +334,37 @@ ufd_write(ufd_t *ufd, const char *data, size_t size)
 
     ufd->pos += written;
     return written;
+}
+
+static size_t
+ufd_read(ufd_t *ufd, char *buf, size_t length)
+{
+    if (length == 0)
+    {
+        return 0;
+    }
+
+    ufd_adjust_pos(ufd);
+
+    if (ufd->file->size == ufd->pos)
+    {
+        /* Конец файла */
+        return 0;
+    }
+
+    ublock_t *block = ufile_get_block_pos(ufd->file, ufd->pos);
+    size_t read = 0;
+    size_t ublock_pos = ufd->pos % BLOCK_SIZE;
+    do
+    {
+        size_t cur_read = ublock_read(block, ublock_pos, buf + read, length - read);
+        read += cur_read;
+        block = block->next;
+        ublock_pos = 0;
+    } while (read < length && block != NULL);
+
+    ufd->pos += read;
+    return read;
 }
 
 /**
@@ -463,12 +530,14 @@ ufs_write(int fd, const char *buf, size_t size)
 ssize_t
 ufs_read(int fd, char *buf, size_t size)
 {
-    /* IMPLEMENT THIS FUNCTION */
-    (void)fd;
-    (void)buf;
-    (void)size;
-    ufs_error_code = UFS_ERR_NOT_IMPLEMENTED;
-    return -1;
+    ufd_t *ufd = search_ufd(fd);
+    if (ufd == NULL)
+    {
+        ufs_error_code = UFS_ERR_NO_FILE;
+        return -1;
+    }
+
+    return ufd_read(ufd, buf, size);
 }
 
 int ufs_close(int fd)
