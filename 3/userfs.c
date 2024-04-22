@@ -389,7 +389,7 @@ ufile_resize(ufile_t *file, size_t size)
             file->last_block = first_block;
         }
 
-        int fill_blocks_count = file->size / BLOCK_SIZE;
+        int fill_blocks_count = (size / BLOCK_SIZE) - (file->size / BLOCK_SIZE);
         ublock_t *last_block = file->last_block;
 
         for (size_t i = 0; i < fill_blocks_count; i++)
