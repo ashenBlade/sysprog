@@ -26,3 +26,8 @@ if(NEED_RESIZE)
     target_compile_definitions(${PROJECT_NAME} PRIVATE NEED_OPEN_FLAGS)
     target_compile_definitions(${TESTS_PROJECT} PRIVATE NEED_OPEN_FLAGS)
 endif(NEED_RESIZE)
+
+if(LEAK_CHECK)
+    target_sources(${TESTS_PROJECT} PRIVATE ../utils/heap_help/heap_help.c)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE LEAK_CHECK)
+endif(LEAK_CHECK)

@@ -6,6 +6,16 @@
 
 #include "userfs.h"
 
+#ifdef LEAK_CHECK
+
+#define internal 
+
+#else
+
+#define internal static
+
+#endif
+
 enum ufs_config
 {
     BLOCK_SIZE = 512
@@ -34,7 +44,7 @@ typedef struct block
     /* PUT HERE OTHER MEMBERS */
 } ublock_t;
 
-static void
+internal void
 ublock_init(ublock_t *block)
 {
     block->data = (char *)calloc(BLOCK_SIZE, sizeof(char));
@@ -43,7 +53,7 @@ ublock_init(ublock_t *block)
     block->prev = NULL;
 }
 
-static ublock_t *
+internal ublock_t *
 ublock_new()
 {
     ublock_t *block = (ublock_t *)calloc(1, sizeof(ublock_t));
@@ -51,7 +61,7 @@ ublock_new()
     return block;
 }
 
-static void
+internal void
 ublock_delete(ublock_t *block)
 {
     free(block->data);
@@ -61,7 +71,7 @@ ublock_delete(ublock_t *block)
     block->prev = NULL;
 }
 
-static size_t
+internal size_t
 ublock_write(ublock_t *block, size_t pos, const char *data, size_t length)
 {
     assert(pos <= block->occupied);
@@ -83,7 +93,7 @@ ublock_write(ublock_t *block, size_t pos, const char *data, size_t length)
     return to_write;
 }
 
-static size_t
+internal size_t
 ublock_read(ublock_t *block, size_t pos, char *buf, size_t length)
 {
     assert(pos <= block->occupied);
@@ -101,7 +111,7 @@ ublock_read(ublock_t *block, size_t pos, char *buf, size_t length)
 
 #ifdef NEED_RESIZE
 
-static void
+internal void
 ublock_resize(ublock_t *block, size_t size)
 {
     assert(size <= BLOCK_SIZE);
@@ -152,7 +162,7 @@ typedef struct file
     size_t size;
 } ufile_t;
 
-static void
+internal void
 ufile_init(ufile_t *file, const char *filename)
 {
     file->name = strdup(filename);
@@ -165,15 +175,17 @@ ufile_init(ufile_t *file, const char *filename)
     file->size = 0;
 }
 
-static void
+internal void
 ufile_delete(ufile_t *file)
 {
     free(file->name);
     ublock_t *b = file->block_list;
     while (b != NULL)
     {
+        ublock_t *next = b->next;
         ublock_delete(b);
-        b = b->next;
+        free(b);
+        b = next;
     }
     file->block_list = NULL;
     file->last_block = NULL;
@@ -182,7 +194,7 @@ ufile_delete(ufile_t *file)
     file->deleted = true;
 }
 
-static ublock_t *
+internal ublock_t *
 ufile_get_block_pos(ufile_t *file, size_t pos)
 {
     assert(pos <= file->size);
@@ -219,7 +231,7 @@ ufile_get_block_pos(ufile_t *file, size_t pos)
     return target;
 }
 
-static ssize_t
+internal ssize_t
 ufile_write(ufile_t *file, size_t pos, const char *data, size_t size)
 {
     assert(pos <= file->size && "Проверка позиции должна осуществляться раньше");
@@ -254,7 +266,6 @@ ufile_write(ufile_t *file, size_t pos, const char *data, size_t size)
     }
     else
     {
-        /* Необходимо найти существующий блок по смещению */
         block = ufile_get_block_pos(file, pos);
     }
 
@@ -270,8 +281,7 @@ ufile_write(ufile_t *file, size_t pos, const char *data, size_t size)
             ublock_t *next = block->next;
             if (next == NULL)
             {
-                next = (ublock_t *)calloc(1, sizeof(ublock_t));
-                ublock_init(next);
+                next = ublock_new();
                 next->prev = block;
                 block->next = next;
                 file->last_block = next;
@@ -298,7 +308,7 @@ static ufile_t *ufile_list = NULL;
  * Выполнить полное удаление файла.
  * Замечание: все файловые дескрипторы должны быть закрыты
  */
-static void
+internal void
 ufile_list_remove(ufile_t *file)
 {
     assert(file->refs == 0);
@@ -324,7 +334,7 @@ ufile_list_remove(ufile_t *file)
     free(file);
 }
 
-static ufile_t *
+internal ufile_t *
 ufile_list_search_existing(const char *filename)
 {
     ufile_t *file = ufile_list;
@@ -340,9 +350,23 @@ ufile_list_search_existing(const char *filename)
     return NULL;
 }
 
+internal void
+ufile_list_destroy(void)
+{
+    ufile_t *file = ufile_list;
+    while (file != NULL)
+    {
+        ufile_t *next = file->next;
+        ufile_delete(file);
+        free(file);
+        file = next;
+    }
+    ufile_list = NULL;
+}
+
 #ifdef NEED_RESIZE
 
-static int
+internal int
 ufile_resize(ufile_t *file, size_t size)
 {
     if (file->size == size)
@@ -437,7 +461,7 @@ typedef struct filedesc
 
 #endif
 
-static void
+internal void
 ufd_init(ufd_t *fd, ufile_t *file, enum open_flags flags)
 {
     ++file->refs;
@@ -446,7 +470,7 @@ ufd_init(ufd_t *fd, ufile_t *file, enum open_flags flags)
     fd->flags = setup_rw_permissions(flags);
 }
 
-static void
+internal void
 ufd_close(ufd_t *ufd)
 {
     int left_refs = --ufd->file->refs;
@@ -460,8 +484,16 @@ ufd_close(ufd_t *ufd)
     ufd->pos = 0;
 }
 
+internal void
+ufd_free(ufd_t *ufd)
+{
+    ufd->file = NULL;
+    ufd->flags = 0;
+    ufd->pos = 0;
+}
+
 /* Проверка на изменение размера файла */
-static void
+internal void
 ufd_adjust_pos(ufd_t *ufd)
 {
     if (ufd->file->size < ufd->pos)
@@ -470,7 +502,7 @@ ufd_adjust_pos(ufd_t *ufd)
     }
 }
 
-static ssize_t
+internal ssize_t
 ufd_write(ufd_t *ufd, const char *data, size_t size)
 {
 #ifdef NEED_OPEN_FLAGS
@@ -493,7 +525,7 @@ ufd_write(ufd_t *ufd, const char *data, size_t size)
     return written;
 }
 
-static size_t
+internal size_t
 ufd_read(ufd_t *ufd, char *buf, size_t length)
 {
 #ifdef NEED_OPEN_FLAGS
@@ -534,7 +566,7 @@ ufd_read(ufd_t *ufd, char *buf, size_t length)
 
 #ifdef NEED_RESIZE
 
-static int
+internal int
 ufd_resize(ufd_t *ufd, size_t size)
 {
 #ifdef NEED_OPEN_FLAGS
@@ -554,7 +586,7 @@ ufd_resize(ufd_t *ufd, size_t size)
     {
         ufd->pos = size;
     }
-    
+
     return 0;
 }
 
@@ -568,9 +600,25 @@ ufd_resize(ufd_t *ufd, size_t size)
  */
 #define INITIAL_FD_LIST_CAPACITY 32
 
-static ufd_t **ufds = NULL;
-static int ufds_count = 0;
-static int ufds_capacity = 0;
+static ufd_t **ufd_list = NULL;
+static size_t ufd_list_count = 0;
+static size_t ufd_list_capacity = 0;
+
+internal void
+ufd_list_destroy(void)
+{
+    for (size_t i = 0; i < ufd_list_count; i++)
+    {
+        ufd_t *ufd = ufd_list[i];
+        if (ufd != NULL)
+        {
+            ufd_free(ufd);
+        }
+    }
+    free(ufd_list);
+    ufd_list_count = 0;
+    ufd_list_capacity = 0;
+}
 
 enum ufs_error_code
 ufs_errno()
@@ -578,7 +626,7 @@ ufs_errno()
     return ufs_error_code;
 }
 
-static void
+internal void
 ufile_list_add(ufile_t *file)
 {
     if (ufile_list == NULL)
@@ -597,26 +645,26 @@ ufile_list_add(ufile_t *file)
     cur->next = file;
 }
 
-static int
+internal int
 create_file_desc(ufile_t *file, enum open_flags flags)
 {
     assert(file != NULL);
 
     int fd = -1;
-    if (ufds_capacity == 0)
+    if (ufd_list_capacity == 0)
     {
         /* Изначально массив дескрипторов не инициализирован */
-        ufds = (ufd_t **)calloc(INITIAL_FD_LIST_CAPACITY, sizeof(ufd_t *));
-        ufds_capacity = INITIAL_FD_LIST_CAPACITY;
-        ++ufds_count;
+        ufd_list = (ufd_t **)calloc(INITIAL_FD_LIST_CAPACITY, sizeof(ufd_t *));
+        ufd_list_capacity = INITIAL_FD_LIST_CAPACITY;
+        ++ufd_list_count;
         fd = 0;
     }
     else
     {
         /* Находим первый свободный слот */
-        for (int i = 0; i < ufds_count; i++)
+        for (size_t i = 0; i < ufd_list_count; i++)
         {
-            if (ufds[i] == NULL)
+            if (ufd_list[i] == NULL)
             {
                 fd = i;
                 break;
@@ -626,20 +674,20 @@ create_file_desc(ufile_t *file, enum open_flags flags)
         /* Если не нашли, то берем последний + проверяем вместимость массива */
         if (fd == -1)
         {
-            if (ufds_capacity == ufds_count)
+            if (ufd_list_capacity == ufd_list_count)
             {
-                ufds_capacity *= 2;
-                ufds = (ufd_t **)realloc(ufds, ufds_capacity * sizeof(ufd_t *));
+                ufd_list_capacity *= 2;
+                ufd_list = (ufd_t **)realloc(ufd_list, ufd_list_capacity * sizeof(ufd_t *));
             }
 
-            fd = ufds_count;
-            ++ufds_count;
+            fd = ufd_list_count;
+            ++ufd_list_count;
         }
     }
 
     ufd_t *ufd = (ufd_t *)calloc(1, sizeof(ufd_t));
     ufd_init(ufd, file, flags);
-    ufds[fd] = ufd;
+    ufd_list[fd] = ufd;
     return fd;
 }
 
@@ -667,15 +715,15 @@ int ufs_open(const char *filename, int flags)
     return create_file_desc(file, (enum open_flags)flags);
 }
 
-static ufd_t *
+internal ufd_t *
 search_ufd(int fd)
 {
-    if (fd < 0 || ufds_count <= fd)
+    if (fd < 0 || ufd_list_count <= (size_t)fd)
     {
         return NULL;
     }
 
-    return ufds[fd];
+    return ufd_list[fd];
 }
 
 ssize_t
@@ -719,7 +767,7 @@ int ufs_close(int fd)
     }
 
     ufd_close(ufd);
-    ufds[fd] = NULL;
+    ufd_list[fd] = NULL;
     free((void *)ufd);
     return 0;
 }
@@ -764,4 +812,6 @@ int ufs_delete(const char *filename)
 
 void ufs_destroy(void)
 {
+    ufile_list_destroy();
+    ufd_list_destroy();
 }
