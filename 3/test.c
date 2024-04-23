@@ -1,8 +1,10 @@
-#include "userfs.h"
-#include "unit.h"
 #include <assert.h>
 #include <limits.h>
 #include <string.h>
+
+
+#include "userfs.h"
+#include "unit.h"
 
 static void
 test_open(void)
@@ -121,6 +123,9 @@ test_io(void)
 	char buffer[2048];
 	unit_check(ufs_write(fd1, "123###", 3) == 3,
 		"data (only needed) is written");
+    /* 
+     * file: '123'
+     */
 	unit_check(ufs_read(fd2, buffer, sizeof(buffer)) == 3, "data is read");
 	unit_check(memcmp(buffer, "123", 3) == 0, "the same data");
 
@@ -134,11 +139,17 @@ test_io(void)
 	unit_check(ufs_read(fd1, buffer, sizeof(buffer)) == 3, "read");
 	unit_check(memcmp(buffer, "123", 3) == 0, "got data from start");
 	unit_check(ufs_write(fd1, "45678###", 5) == 5, "write more");
+    /* 
+     * file:  '12345678'
+     */
 	ufs_close(fd1);
 
 	fd1 = ufs_open("file", 0);
 	unit_fail_if(fd1 == -1);
 	unit_check(ufs_write(fd1, "abcd###", 4) == 4, "overwrite");
+    /* 
+     * file: 'abcd5678'
+     */
 	unit_check(ufs_read(fd1, buffer, sizeof(buffer)) == 4, "read rest");
 	unit_check(memcmp(buffer, "5678", 4) == 0, "got the tail");
 	ufs_close(fd1);
@@ -155,6 +166,9 @@ test_io(void)
 	unit_fail_if(fd1 == -1);
 	unit_check(ufs_write(fd1, "1\0" "2\0" "3\0", 6) == 6,
 		"data with zeros");
+    /* 
+     * file: '1\02\03\078'
+     */
 	ufs_close(fd1);
 	fd1 = ufs_open("file", 0);
 	unit_fail_if(fd1 == -1);
@@ -299,12 +313,15 @@ test_max_file_size(void)
 
 	int fd = ufs_open("file", UFS_CREATE);
 	unit_fail_if(fd == -1);
+    
+    const int bufs_count = 100;
+    const int buf_size = UFS_CONSTR_MAX_FILE_SIZE / bufs_count;
+    assert(bufs_count * buf_size == UFS_CONSTR_MAX_FILE_SIZE);
 
-	int buf_size = 1024 * 1024;
-	char *buf = (char *) malloc(buf_size);
-	for (int i = 0; i < buf_size; ++i)
+    char *buf = (char *)malloc(buf_size);
+    for (int i = 0; i < buf_size; ++i)
 		buf[i] = 'a' + i % 26;
-	for (int i = 0; i < 100; ++i) {
+	for (int i = 0; i < bufs_count; ++i) {
 		ssize_t rc = ufs_write(fd, buf, buf_size);
 		unit_fail_if(rc != buf_size);
 	}
@@ -320,7 +337,7 @@ test_max_file_size(void)
 	fd = ufs_open("file", 0);
 	unit_fail_if(fd == -1);
 	char *buf2 = (char *) malloc(buf_size);
-	for (int i = 0; i < 100; ++i) {
+ 	for (int i = 0; i < bufs_count; ++i) {
 		ssize_t rc = ufs_read(fd, buf2, buf_size);
 		unit_fail_if(rc != buf_size);
 		unit_fail_if(memcmp(buf2, buf, buf_size) != 0);
