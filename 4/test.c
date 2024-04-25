@@ -234,7 +234,8 @@ test_thread_pool_max_tasks(void)
 		struct thread_task *t = tasks[i];
 		unit_fail_if(thread_task_join(t, &result) != 0);
 		unit_fail_if(thread_task_delete(t) != 0);
-		unit_fail_if(result != &arg);
+
+        unit_fail_if(result != &arg);
 	}
 	free(tasks);
 	unit_fail_if(thread_pool_delete(p) != 0);
