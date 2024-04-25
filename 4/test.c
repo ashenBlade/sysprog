@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include <stdint.h>
 
-static void
+/* static */ void
 test_new(void)
 {
 	unit_test_start();
@@ -32,14 +32,14 @@ test_new(void)
 	unit_test_finish();
 }
 
-static void *
+/* static */ void *
 task_incr_f(void *arg)
 {
 	__atomic_add_fetch((int *)arg, 1, __ATOMIC_RELAXED);
 	return arg;
 }
 
-static void *
+/* static */ void *
 task_wait_for_f(void *arg)
 {
 	while(__atomic_load_n((int *)arg, __ATOMIC_RELAXED) == 0)
@@ -47,7 +47,7 @@ task_wait_for_f(void *arg)
 	return arg;
 }
 
-static void
+/* static */ void
 test_push(void)
 {
 	unit_test_start();
@@ -119,7 +119,7 @@ test_push(void)
 	unit_test_finish();
 }
 
-static void *
+/* static */ void *
 task_lock_unlock_f(void *arg)
 {
 	pthread_mutex_t *m = (pthread_mutex_t *) arg;
@@ -128,7 +128,7 @@ task_lock_unlock_f(void *arg)
 	return arg;
 }
 
-static void
+/* static */ void
 test_thread_pool_delete(void)
 {
 	unit_test_start();
@@ -160,7 +160,7 @@ test_thread_pool_delete(void)
 	unit_test_finish();
 }
 
-static void
+/* static */ void
 map_reduce_inc(struct thread_pool *p, struct thread_task **tasks, int count,
 	       int *arg)
 {
@@ -178,7 +178,7 @@ map_reduce_inc(struct thread_pool *p, struct thread_task **tasks, int count,
 	}
 }
 
-static void
+/* static */ void
 test_thread_pool_max_tasks(void)
 {
 	unit_test_start();
@@ -244,7 +244,7 @@ test_thread_pool_max_tasks(void)
 }
 
 
-static void
+/* static */ void
 test_timed_join(void)
 {
 #ifdef NEED_TIMED_JOIN
@@ -289,7 +289,7 @@ test_timed_join(void)
 #endif
 }
 
-static void
+/* static */ void
 test_detach_stress(void)
 {
 #ifdef NEED_DETACH
@@ -328,7 +328,7 @@ test_detach_stress(void)
 #endif
 }
 
-static void
+/* static */ void
 test_detach_long(void)
 {
 #ifdef NEED_DETACH

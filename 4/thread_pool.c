@@ -144,10 +144,12 @@ static void tpool_delete(tpool_t *pool)
         pthread_join(pool->threads[i], NULL);
     }
     free(pool->threads);
+    pool->pending = NULL;
     pool->threads = NULL;
     pool->capacity = 0;
     pool->count = 0;
     pool->busy = 0;
+    pthread_mutex_destroy(&pool->update_lock);
 }
 
 static int tpool_total_tasks(tpool_t *p)
@@ -218,8 +220,8 @@ static void tpool_run_thread(tpool_t *pool, int saved_count)
     }
 
     pthread_create(pool->threads + saved_count, NULL, thread_worker, pool);
-
     ++pool->count;
+
     pthread_mutex_unlock(&pool->update_lock);
 }
 
@@ -408,13 +410,13 @@ int thread_task_timed_join(struct thread_task *task, double timeout, void **resu
 
 int thread_task_delete(struct thread_task *task)
 {
-    if (task->state == TASK_STATE_DESTROYED)
+    if (task->state == TASK_STATE_CREATED || task->state == TASK_STATE_JOINED || task->state == TASK_STATE_FINISHED)
     {
-        return 0;
-    }
+        if (task->detached)
+        {
+            return TPOOL_ERR_INVALID_ARGUMENT;
+        }
 
-    if (task->state == TASK_STATE_CREATED || task->state == TASK_STATE_JOINED)
-    {
         task_destroy(task);
         return 0;
     }
@@ -431,7 +433,14 @@ int thread_task_detach(struct thread_task *task)
         return TPOOL_ERR_TASK_NOT_PUSHED;
     }
 
+    if (TASK_STATE_IS_TERMINAL(atomic_load(&task->state)))
+    {
+        task_destroy(task);
+        return 0;
+    }
+
     task->detached = true;
+
     return 0;
 }
 

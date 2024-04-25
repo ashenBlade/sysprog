@@ -142,6 +142,7 @@ void task_queue_destroy(task_queue_t *queue)
     pthread_cond_destroy(&queue->cond);
 
     queue_destroy(&queue->queue);
+    free(queue);
 }
 
 void *task_queue_dequeue(task_queue_t *queue, bool *success)
@@ -199,7 +200,7 @@ void *task_queue_dequeue(task_queue_t *queue, bool *success)
     } while (!*success);
 
     pthread_mutex_unlock(&queue->mutex);
-    
+
     return data;
 
 fail:
