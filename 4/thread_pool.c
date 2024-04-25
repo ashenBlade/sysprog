@@ -33,6 +33,7 @@ typedef struct thread_task
     volatile enum task_state state;
     pthread_cond_t finished_cond;
     pthread_mutex_t finished_lock;
+    bool detached;
 } ttask_t;
 
 static ttask_t *task_new(thread_task_f function, void *arg)
@@ -42,6 +43,7 @@ static ttask_t *task_new(thread_task_f function, void *arg)
     tt->arg = arg;
     tt->ret_val = NULL;
     tt->state = TASK_STATE_CREATED;
+    tt->detached = false;
     pthread_cond_init(&tt->finished_cond, NULL);
     pthread_mutex_init(&tt->finished_lock, NULL);
     return tt;
@@ -55,13 +57,12 @@ static void task_destroy(ttask_t *tt)
     tt->function = NULL;
     tt->arg = NULL;
     tt->ret_val = NULL;
+    tt->detached = false;
     free(tt);
 }
 
 static void task_set_result(ttask_t *tt, void *result)
 {
-    assert(tt->state == TASK_STATE_RUNNING);
-
     atomic_store_explicit(&tt->ret_val, result, __ATOMIC_RELEASE);
     atomic_store_explicit(&tt->state, TASK_STATE_FINISHED, __ATOMIC_RELEASE);
 
@@ -190,6 +191,11 @@ thread_worker(void *data)
         task_set_result(tt, result);
 
         atomic_fetch_sub_explicit(&pool->busy, 1, __ATOMIC_RELEASE);
+
+        if (tt->detached)
+        {
+            task_destroy(tt);
+        }
     }
 }
 
@@ -280,7 +286,7 @@ int thread_task_new(struct thread_task **task, thread_task_f function, void *arg
 
 bool thread_task_is_finished(const struct thread_task *task)
 {
-    return task->state == TASK_STATE_FINISHED;
+    return task->state == TASK_STATE_FINISHED || task->state == TASK_STATE_JOINED;
 }
 
 bool thread_task_is_running(const struct thread_task *task)
@@ -290,6 +296,11 @@ bool thread_task_is_running(const struct thread_task *task)
 
 int thread_task_join(struct thread_task *task, void **result)
 {
+    if (task->detached)
+    {
+        return TPOOL_ERR_INVALID_ARGUMENT;
+    }
+
     switch (task->state)
     {
     case TASK_STATE_CREATED:
@@ -308,7 +319,7 @@ int thread_task_join(struct thread_task *task, void **result)
     }
 
     pthread_mutex_lock(&task->finished_lock);
-    while (atomic_load(&task->state) == TASK_STATE_RUNNING || atomic_load(&task->state) == TASK_STATE_PENDING)
+    while (!TASK_STATE_IS_TERMINAL(atomic_load(&task->state)))
     {
         pthread_cond_wait(&task->finished_cond, &task->finished_lock);
     }
@@ -344,6 +355,11 @@ int thread_task_timed_join(struct thread_task *task, double timeout, void **resu
     if (timeout < 0)
     {
         return TPOOL_ERR_TIMEOUT;
+    }
+
+    if (task->detached)
+    {
+        return TPOOL_ERR_INVALID_ARGUMENT;
     }
 
     switch (task->state)
@@ -410,9 +426,13 @@ int thread_task_delete(struct thread_task *task)
 
 int thread_task_detach(struct thread_task *task)
 {
-    /* IMPLEMENT THIS FUNCTION */
-    (void)task;
-    return TPOOL_ERR_NOT_IMPLEMENTED;
+    if (task->state == TASK_STATE_CREATED)
+    {
+        return TPOOL_ERR_TASK_NOT_PUSHED;
+    }
+
+    task->detached = true;
+    return 0;
 }
 
 #endif
