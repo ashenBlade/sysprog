@@ -177,6 +177,7 @@ thread_worker(void *data)
             /* Необходимо завершить работу */
             pthread_exit(NULL);
         }
+
         if (tt == NULL)
         {
             continue;
@@ -187,7 +188,7 @@ thread_worker(void *data)
             continue;
         }
 
-        tt->state = TASK_STATE_RUNNING;
+        atomic_store(&tt->state, TASK_STATE_RUNNING);
         atomic_fetch_add_explicit(&pool->busy, 1, __ATOMIC_RELEASE);
 
         void *result = tt->function(tt->arg);
@@ -305,6 +306,7 @@ int thread_task_join(struct thread_task *task, void **result)
         *result = (void*)task->ret_val;
         return 0;
     case TASK_STATE_DESTROYED:
+        *result = (void*) (123);
         return TPOOL_ERR_INVALID_ARGUMENT;
     case TASK_STATE_PENDING:
     case TASK_STATE_RUNNING:

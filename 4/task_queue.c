@@ -11,14 +11,20 @@
 typedef struct list_entry
 {
     void *data;
-    volatile struct list_entry *next;
+    struct list_entry *next;
 } entry_t;
 
-/** Реализация конкурентной очереди MSQueue */
-typedef struct msqueue
+typedef struct queue
 {
-    volatile entry_t *head;
-    volatile entry_t *tail;
+    entry_t *head;
+    entry_t *tail;
+    /* Изначально хотел сделать конкурентную очередь Майкла Скотта,
+     * но по непонятным причинам не смог корректно реализовать.
+     * Использовал CAS из stdatomic (atomic_compare_exchange_strong),
+     * но не сработало и при конкурентной работе возникают ошибки.
+     * Причина не ясна, но лучше хоть как-то (на блокировках), чем никак.
+     */
+    pthread_mutex_t op_mutex;
     int size;
 } queue_t;
 
@@ -31,6 +37,8 @@ static void queue_init(queue_t *queue)
     queue->head = dummy;
     queue->tail = dummy;
     queue->size = 0;
+
+    pthread_mutex_init(&queue->op_mutex, NULL);
 }
 
 static void queue_destroy(queue_t *queue)
@@ -47,58 +55,38 @@ static void queue_destroy(queue_t *queue)
     queue->head = NULL;
     queue->tail = NULL;
     queue->size = 0;
+    pthread_mutex_destroy(&queue->op_mutex);
 }
 
 static entry_t *queue_dequeue(queue_t *queue)
 {
-    /* TODO: освобождать занятую память для старых голов (утечка тут) */
-    while (true)
+    entry_t *result = NULL;
+    pthread_mutex_lock(&queue->op_mutex);
+
+    if (0 < queue->size)
     {
-        entry_t *saved_head = (entry_t *)queue->head;
-        entry_t *saved_tail = (entry_t *)queue->tail;
-        entry_t *next_head = (entry_t *)atomic_load_explicit(&saved_head->next, __ATOMIC_ACQUIRE);
-
-        if (saved_head == saved_tail)
-        {
-            if (next_head == NULL)
-            {
-                /* Очередь пуста */
-                return NULL;
-            }
-
-            (void)atomic_compare_exchange_strong(&queue->tail, &saved_tail, next_head);
-        }
-        else if (atomic_compare_exchange_strong(&queue->head, &saved_head, next_head))
-        {
-            /* Новая dummy голова списка - наш прочитанный элемент */
-            (void)atomic_fetch_sub(&queue->size, 1);
-            return next_head;
-        }
+        result = queue->head->next;
+        queue->head = result;
+        --queue->size;
     }
+
+    pthread_mutex_unlock(&queue->op_mutex);
+    return result;
 }
 
 static void queue_enqueue(queue_t *queue, void *data)
 {
     entry_t *new_tail = (entry_t *)calloc(1, sizeof(entry_t));
     new_tail->next = NULL;
-    atomic_store_explicit(&new_tail->data, data, __ATOMIC_RELEASE);
+    new_tail->data = data;
 
-    while (true)
-    {
-        entry_t *saved_tail = (entry_t *)queue->tail;
-        entry_t *null_entry = NULL;
+    pthread_mutex_lock(&queue->op_mutex);
 
-        if (atomic_compare_exchange_strong(&saved_tail->next, &null_entry, new_tail))
-        {
-            (void)atomic_compare_exchange_strong(&queue->tail, &saved_tail, new_tail);
-            (void)atomic_fetch_add(&queue->size, 1);
-            return;
-        }
-        else
-        {
-            (void)atomic_compare_exchange_strong(&queue->tail, &saved_tail, saved_tail->next);
-        }
-    }
+    queue->tail->next = new_tail;
+    queue->tail = new_tail;
+    ++queue->size;
+
+    pthread_mutex_unlock(&queue->op_mutex);
 }
 
 struct task_queue
