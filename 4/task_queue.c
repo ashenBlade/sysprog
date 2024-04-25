@@ -58,19 +58,25 @@ static void queue_destroy(queue_t *queue)
     pthread_mutex_destroy(&queue->op_mutex);
 }
 
-static entry_t *queue_dequeue(queue_t *queue)
+static void *queue_dequeue(queue_t *queue, bool *success)
 {
-    entry_t *result = NULL;
+    void *result = NULL;
+    bool suc = false;
     pthread_mutex_lock(&queue->op_mutex);
 
     if (0 < queue->size)
     {
-        result = queue->head->next;
-        queue->head = result;
+        entry_t *next_head = queue->head->next;
+        result = next_head->data;
+        entry_t *old_head = queue->head;
+        queue->head = next_head;
+        free(old_head);
         --queue->size;
+        suc = true;
     }
 
     pthread_mutex_unlock(&queue->op_mutex);
+    *success = suc;
     return result;
 }
 
@@ -147,18 +153,16 @@ void *task_queue_dequeue(task_queue_t *queue, bool *success)
     }
 
     /* Пытаемся прочитать значение из существующей очереди без блокировок */
-    entry_t *popped = queue_dequeue(&queue->queue);
-    if (popped != NULL)
+    void *data = queue_dequeue(&queue->queue, success);
+    if (*success)
     {
-        void *data = popped->data;
-        // free(popped);
-        *success = true;
         return data;
     }
 
+    *success = false;
+
     /* Очередь пуста - блокируемся в ожидании нового элемента */
-    int ret_code;
-    ret_code = pthread_mutex_lock(&queue->mutex);
+    int ret_code = pthread_mutex_lock(&queue->mutex);
     if (ret_code != 0)
     {
         /* Скорее всего mutex был уничтожен из вызова task_queue_destroy */
@@ -191,14 +195,11 @@ void *task_queue_dequeue(task_queue_t *queue, bool *success)
             goto fail;
         }
 
-        popped = queue_dequeue(&queue->queue);
-    } while (popped == NULL);
+        data = queue_dequeue(&queue->queue, success);
+    } while (!*success);
 
     pthread_mutex_unlock(&queue->mutex);
-
-    void *data = popped->data;
-    *success = true;
-    // free(popped);
+    
     return data;
 
 fail:

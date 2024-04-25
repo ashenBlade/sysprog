@@ -227,7 +227,7 @@ test_thread_pool_max_tasks(void)
 		unit_check(rc == TPOOL_ERR_TOO_MANY_TASKS, "too many tasks");
 		break;
 	}
-	unit_check(overuse < more_count, "reached max tasks");
+	unit_check(overuse < more_count, "reached max tasks"); 
 	__atomic_store_n(&arg, 1, __ATOMIC_RELAXED);
 	for (int i = 0; i < TPOOL_MAX_TASKS + overuse; ++i) {
 		void *result;

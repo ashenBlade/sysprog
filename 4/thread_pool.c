@@ -62,11 +62,6 @@ static void task_set_result(ttask_t *tt, void *result)
 {
     assert(tt->state == TASK_STATE_RUNNING);
 
-    if (result == NULL)
-    {
-        write(STDOUT_FILENO, "null\n", 5);
-    }
-
     atomic_store_explicit(&tt->ret_val, result, __ATOMIC_RELEASE);
     atomic_store_explicit(&tt->state, TASK_STATE_FINISHED, __ATOMIC_RELEASE);
 
@@ -79,7 +74,7 @@ static void *task_wait_result(ttask_t *tt)
 {
     if (TASK_STATE_IS_TERMINAL(tt->state))
     {
-        return (void*) tt->ret_val;
+        return (void *)tt->ret_val;
     }
 
     pthread_mutex_lock(&tt->finished_lock);
@@ -89,7 +84,7 @@ static void *task_wait_result(ttask_t *tt)
     }
     pthread_mutex_unlock(&tt->finished_lock);
 
-    return (void*) tt->ret_val;
+    return (void *)tt->ret_val;
 }
 
 typedef struct thread_pool
@@ -188,7 +183,7 @@ thread_worker(void *data)
             continue;
         }
 
-        atomic_store(&tt->state, TASK_STATE_RUNNING);
+        atomic_store_explicit(&tt->state, TASK_STATE_RUNNING, __ATOMIC_RELEASE);
         atomic_fetch_add_explicit(&pool->busy, 1, __ATOMIC_RELEASE);
 
         void *result = tt->function(tt->arg);
@@ -303,10 +298,9 @@ int thread_task_join(struct thread_task *task, void **result)
         task->state = TASK_STATE_JOINED;
         /* fall-through */
     case TASK_STATE_JOINED:
-        *result = (void*)task->ret_val;
+        *result = (void *)task->ret_val;
         return 0;
     case TASK_STATE_DESTROYED:
-        *result = (void*) (123);
         return TPOOL_ERR_INVALID_ARGUMENT;
     case TASK_STATE_PENDING:
     case TASK_STATE_RUNNING:
@@ -314,26 +308,84 @@ int thread_task_join(struct thread_task *task, void **result)
     }
 
     pthread_mutex_lock(&task->finished_lock);
-    while (task->state == TASK_STATE_RUNNING || task->state == TASK_STATE_PENDING)
+    while (atomic_load(&task->state) == TASK_STATE_RUNNING || atomic_load(&task->state) == TASK_STATE_PENDING)
     {
         pthread_cond_wait(&task->finished_cond, &task->finished_lock);
     }
     pthread_mutex_unlock(&task->finished_lock);
 
-    *result = (void*) task->ret_val;
+    *result = (void *)task->ret_val;
     task->state = TASK_STATE_JOINED;
     return 0;
 }
-
 #ifdef NEED_TIMED_JOIN
+
+/*
+ * Знаю, что некрасиво так ставить include, но они нужны только для TIMED_JOIN.
+ * Незачем их тащить если не нужны
+ */
+#include <math.h>
+#include <errno.h>
+#include <stdio.h>
+
+#define NSECS_IN_SEC 1000000000
+
+static void calc_abs_timeout(double timeout, struct timespec *ts)
+{
+    clock_gettime(CLOCK_REALTIME, ts);
+    time_t secs = (time_t)trunc(timeout);
+    time_t nsecs = (timeout - secs) * NSECS_IN_SEC;
+    ts->tv_sec += secs + (ts->tv_nsec + nsecs) / NSECS_IN_SEC;
+    ts->tv_nsec = (ts->tv_nsec + nsecs) % NSECS_IN_SEC;
+}
 
 int thread_task_timed_join(struct thread_task *task, double timeout, void **result)
 {
-    /* IMPLEMENT THIS FUNCTION */
-    (void)task;
-    (void)timeout;
-    (void)result;
-    return TPOOL_ERR_NOT_IMPLEMENTED;
+    if (timeout < 0)
+    {
+        return TPOOL_ERR_TIMEOUT;
+    }
+
+    switch (task->state)
+    {
+    case TASK_STATE_CREATED:
+        return TPOOL_ERR_TASK_NOT_PUSHED;
+    case TASK_STATE_FINISHED:
+        task->state = TASK_STATE_JOINED;
+        /* fall-through */
+    case TASK_STATE_JOINED:
+        *result = (void *)task->ret_val;
+        return 0;
+    case TASK_STATE_DESTROYED:
+        return TPOOL_ERR_INVALID_ARGUMENT;
+    case TASK_STATE_PENDING:
+    case TASK_STATE_RUNNING:
+        break;
+    }
+
+    struct timespec ts;
+    calc_abs_timeout(timeout, &ts);
+
+    pthread_mutex_lock(&task->finished_lock);
+    while (atomic_load(&task->state) == TASK_STATE_RUNNING || atomic_load(&task->state) == TASK_STATE_PENDING)
+    {
+        int ret = pthread_cond_timedwait(&task->finished_cond, &task->finished_lock, &ts);
+        if (ret != 0)
+        {
+            if (ret == ETIMEDOUT)
+            {
+                pthread_mutex_unlock(&task->finished_lock);
+                return TPOOL_ERR_TIMEOUT;
+            }
+            perror("pthread_cond_timedwait");
+            exit(1);
+        }
+    }
+    pthread_mutex_unlock(&task->finished_lock);
+
+    *result = (void *)task->ret_val;
+    task->state = TASK_STATE_JOINED;
+    return 0;
 }
 
 #endif
