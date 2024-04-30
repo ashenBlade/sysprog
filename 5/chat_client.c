@@ -22,7 +22,7 @@ chat_client_new(const char *name)
 
 	struct chat_client *client = calloc(1, sizeof(*client));
 	client->socket = -1;
-
+    
 	/* IMPLEMENT THIS FUNCTION */
 
 	return client;
