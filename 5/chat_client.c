@@ -1,3 +1,4 @@
+#include <fcntl.h>
 #include <assert.h>
 #include <stdbool.h>
 #include <ctype.h>
@@ -15,6 +16,7 @@
 #include "chat_client.h"
 #include "recv_buf.h"
 #include "send_queue.h"
+#include "queue.h"
 
 struct input_buf
 {
@@ -64,10 +66,9 @@ struct chat_client
     /** Socket connected to the server. */
     int socket;
     struct pollfd pfd;
-    /** Array of received messages. */
-    struct chat_message **received;
-    int received_cnt;
-    int received_cap;
+
+    /* Очередь полученных сообщений. Содержит указатели на struct chat_message */
+    struct queue received;
 
     struct input_buf out_buf;
     struct recv_buf recv_buf;
@@ -130,7 +131,7 @@ process_user_input(struct chat_client *client, const char *data, int len)
             free(str);
         }
 
-        while (isspace(data[end]) && end < str_tmp_len)
+        while (isspace(str_tmp_buf[end]) && end < str_tmp_len)
         {
             ++end;
         }
@@ -147,19 +148,7 @@ process_user_input(struct chat_client *client, const char *data, int len)
 static void
 chat_client_add_message(struct chat_client *client, struct chat_message *message)
 {
-    if (client->received_cap == 0)
-    {
-        client->received = calloc(1, sizeof(struct chat_message *));
-        client->received_cap = 1;
-    }
-    else if (client->received_cap == client->received_cnt)
-    {
-        client->received_cap *= 2;
-        client->received = realloc(client->received, client->received_cap * sizeof(struct chat_message *));
-    }
-
-    client->received[client->received_cnt] = message;
-    ++client->received_cnt;
+    queue_enqueue(&client->received, message);
 }
 
 struct chat_client *
@@ -173,10 +162,7 @@ chat_client_new(const char *name)
     client->socket = -1;
 
     send_queue_init(&client->send_queue);
-
-    client->received = NULL;
-    client->received_cnt = 0;
-    client->received_cap = 0;
+    queue_init(&client->received);
 
     return client;
 }
@@ -232,10 +218,16 @@ split_addr(const char *addr, char *ip, char *port)
     return 0;
 }
 
+static void
+socket_make_nonblock(int sock)
+{
+    int flags = fcntl(sock, F_GETFL);
+    flags |= O_NONBLOCK;
+    fcntl(sock, F_SETFL, flags);
+}
+
 int chat_client_connect(struct chat_client *client, const char *addr)
 {
-    (void)client;
-    (void)addr;
     char ip_addr[16];
     char port_addr[8];
     memset(ip_addr, 0, sizeof(ip_addr));
@@ -286,6 +278,8 @@ int chat_client_connect(struct chat_client *client, const char *addr)
         return CHAT_ERR_NO_ADDR;
     }
 
+    socket_make_nonblock(csock);
+
     client->socket = csock;
     client->pfd.fd = csock;
     client->pfd.events = POLLIN;
@@ -296,9 +290,12 @@ int chat_client_connect(struct chat_client *client, const char *addr)
 struct chat_message *
 chat_client_pop_next(struct chat_client *client)
 {
-
-    (void)client;
-    return NULL;
+    struct chat_message *msg;
+    if (queue_dequeue(&client->received, (void**) &msg) == -1)
+    {
+        return NULL;
+    }
+    return msg;
 }
 
 static int get_timeout(double timeout)
@@ -308,7 +305,7 @@ static int get_timeout(double timeout)
         return -1;
     }
 
-    return timeout * 1000;
+    return (int)(timeout * 1000);
 }
 
 static int recv_int(int sock)
@@ -417,7 +414,6 @@ int chat_client_update(struct chat_client *client, double timeout)
     {
         return CHAT_ERR_TIMEOUT;
     }
-
 
     if (client->pfd.revents & POLLIN)
     {

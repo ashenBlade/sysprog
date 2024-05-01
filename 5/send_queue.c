@@ -1,6 +1,8 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <string.h>
+#include <arpa/inet.h>
 
 #include "send_queue.h"
 
@@ -50,6 +52,16 @@ send_queue_enqueue(struct send_queue *queue, char *data, int len)
         queue->tail->next = new_elem;
         queue->tail = new_elem;
     }
+}
+
+void
+send_queue_enqueue_len(struct send_queue *queue, char *data, int len)
+{
+    char *send_str = calloc(len + sizeof(int), sizeof(char));
+    memcpy(send_str + sizeof(int), data, len);
+    int size = htonl(len);
+    memcpy(send_str, (char *)&size, sizeof(int));
+    send_queue_enqueue(queue, send_str, len + sizeof(int));
 }
 
 int

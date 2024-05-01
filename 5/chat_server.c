@@ -16,6 +16,7 @@
 #include "chat_server.h"
 #include "recv_buf.h"
 #include "send_queue.h"
+#include "queue.h"
 
 #define LISTEN_BACKLOG 10
 
@@ -57,18 +58,26 @@ struct chat_server
 {
     /** Listening socket. To accept new clients. */
     int socket;
-    /** Array of peers. */
-    struct chat_peer *peers;
 
-    /* Индекс 0 - pollfd сервера, остальные - клиентские */
+    /* 
+     * Индекс 0 - pollfd сервера, остальные - клиентские.
+     * 
+     */
     struct pollfd *fds;
     int fds_cnt;
     int fds_cap;
 
-    /* Список пришедших сообщений, ожидающих отправки */
-    struct message_peer **msgs;
-    int msgs_cnt;
-    int msgs_cap;
+    /** 
+     * Массив пиров сервера.
+     * Элементы этого массива соответствуют элементам массива fds, НО начиная с 1 (у fds) - индекс i в этом массиве равен индексу i + 1 в массиве fds
+     */
+    struct chat_peer *peers;
+
+    /*
+     * Список пришедших сообщений, ожидающих отправки.
+     * Содержит указатели на struct message_peer
+     */
+    struct queue msgs;
 };
 
 #define SERVER_IS_INIT(server) ((server)->socket != SOCKET_NOT_INIT)
@@ -95,9 +104,7 @@ chat_server_new(void)
     server->fds = NULL;
     server->peers = NULL;
 
-    server->msgs = NULL;
-    server->msgs_cnt = 0;
-    server->msgs_cap = 0;
+    queue_init(&server->msgs);
 
     return server;
 }
@@ -114,7 +121,7 @@ void chat_server_delete(struct chat_server *server)
 
     free(server->peers);
     free(server->fds);
-    free(server->msgs);
+    queue_free(&server->msgs);
 
     memset(server, 0, sizeof(*server));
     free(server);
@@ -172,68 +179,50 @@ int chat_server_listen(struct chat_server *server, uint16_t port)
 }
 
 static void
-chat_server_add_message(struct chat_server *s, struct message_peer *message)
+chat_server_register_message(struct chat_server *s, struct message_peer *message)
 {
-    if (s->msgs_cap == 0)
-    {
-        s->msgs = calloc(1, sizeof(struct message_peer *));
-        s->msgs_cnt = 1;
-        s->msgs_cap = 1;
-        s->msgs[0] = message;
-        return;
-    }
+    queue_enqueue(&s->msgs, (void *)message);
 
-    if (s->msgs_cap == s->msgs_cnt)
+    /* Уведомляем клиентов о новом сообщении */
+    struct chat_peer *peer;
+    struct pollfd *pfd;
+    for (int i = 1; i < s->fds_cnt; i++)
     {
-        s->msgs_cap *= 2;
-        s->msgs = realloc(s->msgs, s->msgs_cap * sizeof(struct message_peer *));
-    }
+        peer = s->peers + (i - 1);
+        pfd = s->fds + i;
+        if (pfd->fd == message->author)
+        {
+            /* Отправителю не отправляем повторно */
+            continue;
+        }
 
-    s->msgs[s->msgs_cnt] = message;
-    ++s->msgs_cnt;
+        send_queue_enqueue_len(&peer->send_queue, message->msg->data, message->msg->len);
+        pfd->events |= POLLOUT;
+    }
 }
 
 static int
 chat_server_pop_message(struct chat_server *server, struct message_peer **msg)
 {
-    if (server->msgs_cnt == 0)
+    if (queue_dequeue(&server->msgs, (void **)msg) == -1)
     {
         return -1;
     }
 
-    *msg = server->msgs[server->msgs_cnt - 1];
-    --server->msgs_cnt;
     return 0;
 }
 
 struct chat_message *
 chat_server_pop_next(struct chat_server *server)
 {
-    struct message_peer *msg = NULL;
-    if (chat_server_pop_message(server, &msg) == -1)
+    struct message_peer *mp = NULL;
+    if (chat_server_pop_message(server, &mp) == -1)
     {
         return NULL;
     }
 
-    for (int i = 1; i < server->fds_cnt; i++)
-    {
-        struct pollfd *fd = server->fds + i;
-        if (fd->fd == msg->author)
-        {
-            continue;
-        }
-
-        char *send_str = calloc(msg->msg->len + sizeof(int), sizeof(char));
-        memcpy(send_str + sizeof(int), msg->msg->data, msg->msg->len);
-        int size = htonl(msg->msg->len);
-        memcpy(send_str, (char *)&size, sizeof(int));
-        send_queue_enqueue(&server->peers[i - 1].send_queue, send_str, msg->msg->len + sizeof(int));
-
-        fd->events |= POLLIN;
-    }
-
-    struct chat_message *m = msg->msg;
-    free(msg);
+    struct chat_message *m = mp->msg;
+    free(mp);
     return m;
 }
 
@@ -290,7 +279,6 @@ consume_client_message(struct chat_server *server, struct chat_peer *peer)
 {
     if (!recv_buf_is_init(&peer->recv_buf))
     {
-
         char buf[sizeof(int)];
         int len = recv(peer->socket, buf, sizeof(buf), 0);
         if (len == 0)
@@ -340,7 +328,7 @@ consume_client_message(struct chat_server *server, struct chat_peer *peer)
     mp->msg = msg;
     mp->author = peer->socket;
 
-    chat_server_add_message(server, mp);
+    chat_server_register_message(server, mp);
     recv_buf_free(&peer->recv_buf);
     return 0;
 }
@@ -393,6 +381,8 @@ chat_server_remove_client(struct chat_server *s, int fds_idx)
      * Для удаления клиента используем простое перемещение структур - memmove.
      * Но если надо удалить последний элемент, то просто зануляем нужную структуру
      */
+    /* Закрываем сокет клиента */
+    close(s->fds[fds_idx].fd);
 
     /* fds */
     if (fds_idx != (s->fds_cnt - 1))
@@ -459,7 +449,7 @@ int chat_server_update(struct chat_server *server, double timeout)
         /*
          * Если клиент подключился и сразу отправил данные, то после обычного accept мы не заметим этого (в тестах).
          * Поэтому делаем такой хак - если данные есть в буфере, то выставляем revents у соответствующего pollfd клиента.
-         * 
+         *
          * Также, если данные есть, то nfds не уменьшаем - чтобы корректно прочитать данные клиента
          */
         if (socket_has_data_to_read(new_client))
@@ -478,8 +468,10 @@ int chat_server_update(struct chat_server *server, double timeout)
         pfd = server->fds + i;
         struct chat_peer *peer = server->peers + (i - 1);
         bool should_delete = false;
+        bool processed = false;
         if (CLIENT_READY_READ(pfd))
         {
+            processed = true;
             if (consume_client_message(server, peer) == -1)
             {
                 should_delete = true;
@@ -488,6 +480,7 @@ int chat_server_update(struct chat_server *server, double timeout)
 
         if (!should_delete && CLIENT_READY_WRITE(pfd))
         {
+            processed = true;
             if (send_client_message(server, peer, pfd) == -1)
             {
                 should_delete = true;
@@ -503,7 +496,10 @@ int chat_server_update(struct chat_server *server, double timeout)
             i++;
         }
 
-        --nfds;
+        if (processed)
+        {
+            --nfds;
+        }
     }
 
     return 0;
@@ -544,12 +540,12 @@ int chat_server_get_events(const struct chat_server *server)
         return 0;
     }
 
-    if (0 < server->msgs_cnt)
+    if (queue_is_empty(&server->msgs))
     {
-        return CHAT_EVENT_INPUT | CHAT_EVENT_OUTPUT;
+        return CHAT_EVENT_INPUT;
     }
 
-    return CHAT_EVENT_INPUT;
+    return CHAT_EVENT_INPUT | CHAT_EVENT_OUTPUT;
 }
 
 int chat_server_feed(struct chat_server *server, const char *msg, uint32_t msg_size)

@@ -15,7 +15,8 @@ target_sources(${LIB_NAME} PRIVATE
     chat_client.c
     chat_server.c
     recv_buf.c
-    send_queue.c)
+    send_queue.c
+    queue.c)
 
 add_executable(${SERVER_NAME})
 target_sources(${SERVER_NAME} PRIVATE

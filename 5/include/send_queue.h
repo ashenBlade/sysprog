@@ -20,6 +20,8 @@ struct send_queue
 void send_queue_init(struct send_queue *queue);
 void send_queue_free(struct send_queue *queue);
 void send_queue_enqueue(struct send_queue *queue, char *data, int len);
+/* Добавить в очередь отправки строку, но в данных добавить префикс длины сообщения */
+void send_queue_enqueue_len(struct send_queue *queue, char *data, int data_len);
 int send_queue_get_pending_chunk(struct send_queue *queue, char **data, int *len);
 void send_queue_record_sent(struct send_queue *queue, int send);
 bool send_queue_empty(const struct send_queue *queue);
