@@ -1,6 +1,4 @@
-#include "chat.h"
-#include "chat_server.h"
-
+#include <sys/ioctl.h>
 #include <fcntl.h>
 #include <stdbool.h>
 #include <string.h>
@@ -14,144 +12,12 @@
 #include <unistd.h>
 #include <poll.h>
 
+#include "chat.h"
+#include "chat_server.h"
+#include "recv_buf.h"
+#include "send_queue.h"
+
 #define LISTEN_BACKLOG 10
-
-struct send_queue_elem
-{
-    struct send_queue_elem *next;
-    char *data;
-    int len;
-    int pos;
-};
-
-struct send_queue
-{
-    struct send_queue_elem *head;
-    struct send_queue_elem *tail;
-};
-
-static void
-send_queue_enqueue(struct send_queue *queue, char *data, int len)
-{
-    struct send_queue_elem *new_elem = calloc(1, sizeof(struct send_queue_elem));
-    new_elem->next = NULL;
-    new_elem->data = data;
-    new_elem->len = len;
-    new_elem->pos = 0;
-
-    if (queue->head == NULL)
-    {
-        queue->head = new_elem;
-        queue->tail = new_elem;
-    }
-    else
-    {
-        queue->tail->next = new_elem;
-        queue->tail = new_elem;
-    }
-}
-
-static int
-send_queue_get_pending_chunk(struct send_queue *queue, char **data, int *len)
-{
-    if (queue->head == NULL)
-    {
-        return -1;
-    }
-    struct send_queue_elem *head = queue->head;
-    assert(head->pos < head->len);
-    *data = head->data + head->pos;
-    *len = head->len - head->pos;
-    return 0;
-}
-
-static void
-send_queue_record_sent(struct send_queue *queue, int send)
-{
-    assert(queue->head != NULL);
-
-    struct send_queue_elem *head = queue->head;
-    head->pos += send;
-    if (head->pos < head->len)
-    {
-        return;
-    }
-
-    if (head->next == NULL)
-    {
-        queue->head = NULL;
-        queue->tail = NULL;
-    }
-    else
-    {
-        queue->head = head->next;
-    }
-    head->next = NULL;
-    head->pos = 0;
-    head->len = 0;
-    free(head->data);
-    free(head);
-}
-
-static bool
-send_queue_empty(struct send_queue *queue)
-{
-    /* Данные есть, пока очередь не пуста */
-    return queue->head == NULL;
-}
-
-struct recv_buf
-{
-    char *buf;
-    int len;
-    int pos;
-};
-
-static void
-recv_buf_init(struct recv_buf *buf, int len)
-{
-    buf->buf = calloc(len, sizeof(char));
-    buf->len = len;
-    buf->pos = 0;
-}
-
-static int
-recv_buf_left(struct recv_buf *buf)
-{
-    return buf->len - buf->pos;
-}
-
-static void
-recv_buf_get_pending_buf(struct recv_buf *buf, char **out_buf, int *len)
-{
-    *out_buf = buf->buf + buf->pos;
-    *len = buf->len - buf->pos;
-}
-
-static void
-recv_buf_record_sent(struct recv_buf *buf, int received)
-{
-    buf->pos += received;
-}
-
-static bool
-recv_buf_ready(struct recv_buf *buf)
-{
-    return buf->len <= buf->pos;
-}
-
-static bool recv_buf_free(struct recv_buf *buf)
-{
-    /* Не вызываю free на буфер, т.к. эта строка будет использоваться в chat_message */
-    buf->buf = NULL;
-    buf->len = 0;
-    buf->pos = 0;
-}
-
-static bool recv_buf_is_init(struct recv_buf *buf)
-{
-    return buf->buf != NULL;
-}
 
 struct chat_peer
 {
@@ -206,9 +72,17 @@ struct chat_server
 };
 
 #define SERVER_IS_INIT(server) ((server)->socket != SOCKET_NOT_INIT)
-#define SERVER_HAS_ACCEPT(server) (((server)->fds[0].events & POLLIN) != 0)
+#define SERVER_HAS_ACCEPT(server) (((server)->fds[0].revents & POLLIN) != 0)
 #define CLIENT_READY_READ(pollfd) (((pollfd)->revents & POLLIN) != 0)
 #define CLIENT_READY_WRITE(pollfd) (((pollfd)->revents & POLLOUT) != 0)
+
+static void
+socket_make_nonblock(int sock)
+{
+    int flags = fcntl(sock, F_GETFL);
+    flags |= O_NONBLOCK;
+    fcntl(sock, F_SETFL, flags);
+}
 
 struct chat_server *
 chat_server_new(void)
@@ -233,7 +107,7 @@ void chat_server_delete(struct chat_server *server)
     if (SERVER_IS_INIT(server))
         close(server->socket);
 
-    for (int i = 0; i < server->fds_cnt; i++)
+    for (int i = 0; i < server->fds_cnt - 1; i++)
     {
         close(server->peers[i].socket);
     }
@@ -252,11 +126,14 @@ int chat_server_listen(struct chat_server *server, uint16_t port)
     {
         return CHAT_ERR_ALREADY_STARTED;
     }
+
     int ssock = socket(AF_INET, SOCK_STREAM, 0);
     if (ssock == -1)
     {
         return CHAT_ERR_SYS;
     }
+
+    socket_make_nonblock(ssock);
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
@@ -264,7 +141,7 @@ int chat_server_listen(struct chat_server *server, uint16_t port)
     addr.sin_port = htons(port);
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
-    if (bind(ssock, (const struct sockaddr *)&addr, LISTEN_BACKLOG) == -1)
+    if (bind(ssock, (const struct sockaddr *)&addr, sizeof(struct sockaddr_in)) == -1)
     {
         close(ssock);
         if (errno == EADDRINUSE)
@@ -312,8 +189,8 @@ chat_server_add_message(struct chat_server *s, struct message_peer *message)
         s->msgs = realloc(s->msgs, s->msgs_cap * sizeof(struct message_peer *));
     }
 
-    s->msgs[s->fds_cnt] = message;
-    ++s->fds_cnt;
+    s->msgs[s->msgs_cnt] = message;
+    ++s->msgs_cnt;
 }
 
 static int
@@ -338,7 +215,7 @@ chat_server_pop_next(struct chat_server *server)
         return NULL;
     }
 
-    for (size_t i = 1; i < server->fds_cnt; i++)
+    for (int i = 1; i < server->fds_cnt; i++)
     {
         struct pollfd *fd = server->fds + i;
         if (fd->fd == msg->author)
@@ -346,8 +223,12 @@ chat_server_pop_next(struct chat_server *server)
             continue;
         }
 
-        char *str = strdup(msg->msg->data);
-        send_queue_enqueue(&server->peers[i - 1].send_queue, str, msg->msg->len);
+        char *send_str = calloc(msg->msg->len + sizeof(int), sizeof(char));
+        memcpy(send_str + sizeof(int), msg->msg->data, msg->msg->len);
+        int size = htonl(msg->msg->len);
+        memcpy(send_str, (char *)&size, sizeof(int));
+        send_queue_enqueue(&server->peers[i - 1].send_queue, send_str, msg->msg->len + sizeof(int));
+
         fd->events |= POLLIN;
     }
 
@@ -375,15 +256,7 @@ chat_server_ensure_capacity(struct chat_server *s)
     }
 }
 
-static void
-socket_make_nonblock(int sock)
-{
-    int flags = fcntl(sock, F_GETFL);
-    flags |= O_NONBLOCK;
-    fcntl(sock, F_SETFL, flags);
-}
-
-static void
+static struct pollfd *
 chat_server_add_client(struct chat_server *s, int cfd)
 {
     chat_server_ensure_capacity(s);
@@ -399,6 +272,7 @@ chat_server_add_client(struct chat_server *s, int cfd)
     socket_make_nonblock(cfd);
 
     ++s->fds_cnt;
+    return client_pfd;
 }
 
 static int calc_timeout(double timeout_s)
@@ -409,44 +283,6 @@ static int calc_timeout(double timeout_s)
     }
 
     return timeout_s * 1000;
-}
-
-static int
-sock_read_string(int sock, char **str, int *len)
-{
-    /* Читаем размер строки */
-    char buf[sizeof(int)];
-    int cur = 0;
-    while (cur < sizeof(int))
-    {
-        ssize_t read = recv(sock, buf + cur, sizeof(int) - cur, 0);
-        if (read == -1)
-        {
-            return -1;
-        }
-
-        cur += read;
-    }
-
-    int str_len = ntohl(*((int *)buf));
-    char *res_str = (char *)calloc(str_len + 1, sizeof(char));
-    res_str[str_len] = '\0';
-    cur = 0;
-    while (cur < str_len)
-    {
-        ssize_t read = recv(sock, res_str + cur, str_len - cur, 0);
-        if (read <= 0)
-        {
-            free(res_str);
-            return -1;
-        }
-
-        cur += read;
-    }
-
-    *str = res_str;
-    *len = str_len;
-    return 0;
 }
 
 static int
@@ -462,10 +298,19 @@ consume_client_message(struct chat_server *server, struct chat_peer *peer)
             return -1;
         }
 
+        if (len == -1)
+        {
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+            {
+                return 0;
+            }
+
+            return -1;
+        }
+
         int str_len = ntohl(*((int *)buf));
 
         recv_buf_init(&peer->recv_buf, str_len);
-        return -1;
     }
 
     char *buf;
@@ -503,6 +348,7 @@ consume_client_message(struct chat_server *server, struct chat_peer *peer)
 static int
 send_client_message(struct chat_server *server, struct chat_peer *peer, struct pollfd *pfd)
 {
+    (void)server;
     char *data;
     int len;
     if (send_queue_get_pending_chunk(&peer->send_queue, &data, &len) == -1)
@@ -572,6 +418,15 @@ chat_server_remove_client(struct chat_server *s, int fds_idx)
     --s->fds_cnt;
 }
 
+static bool
+socket_has_data_to_read(int sock)
+{
+    int count;
+    int rc = ioctl(sock, FIONREAD, &count);
+    assert(rc == 0);
+    return 0 < count;
+}
+
 int chat_server_update(struct chat_server *server, double timeout)
 {
     if (!SERVER_IS_INIT(server))
@@ -599,7 +454,22 @@ int chat_server_update(struct chat_server *server, double timeout)
     if (SERVER_HAS_ACCEPT(server))
     {
         int new_client = accept(server->socket, NULL, NULL);
-        chat_server_add_client(server, new_client);
+        struct pollfd *cpfd = chat_server_add_client(server, new_client);
+
+        /*
+         * Если клиент подключился и сразу отправил данные, то после обычного accept мы не заметим этого (в тестах).
+         * Поэтому делаем такой хак - если данные есть в буфере, то выставляем revents у соответствующего pollfd клиента.
+         * 
+         * Также, если данные есть, то nfds не уменьшаем - чтобы корректно прочитать данные клиента
+         */
+        if (socket_has_data_to_read(new_client))
+        {
+            cpfd->revents |= POLLIN;
+        }
+        else
+        {
+            --nfds;
+        }
     }
 
     struct pollfd *pfd;
@@ -669,9 +539,17 @@ int chat_server_get_socket(const struct chat_server *server)
 
 int chat_server_get_events(const struct chat_server *server)
 {
-    return server->msgs_cnt == 0
-               ? CHAT_EVENT_INPUT
-               : CHAT_EVENT_OUTPUT;
+    if (!SERVER_IS_INIT(server))
+    {
+        return 0;
+    }
+
+    if (0 < server->msgs_cnt)
+    {
+        return CHAT_EVENT_INPUT | CHAT_EVENT_OUTPUT;
+    }
+
+    return CHAT_EVENT_INPUT;
 }
 
 int chat_server_feed(struct chat_server *server, const char *msg, uint32_t msg_size)
