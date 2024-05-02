@@ -18,6 +18,10 @@
 #include "send_queue.h"
 #include "queue.h"
 
+#ifdef LEAK_CHECK
+#define static /* Пусто */
+#endif
+
 struct input_buf
 {
     /* Временный буфер для несформированных сообщений */
@@ -84,7 +88,7 @@ process_user_input(struct chat_client *client, const char *data, int len)
     int str_tmp_len = len;
     struct input_buf *buf = &client->out_buf;
     struct send_queue *send_queue = &client->send_queue;
-    if (buf->tmp_buf_len != 0)
+    if (0 < buf->tmp_buf_len)
     {
         /* Не самый оптимальный вариант - конкатенировать строки, но так легче */
         char *tmp = calloc(len + buf->tmp_buf_len, sizeof(char));
@@ -113,6 +117,12 @@ process_user_input(struct chat_client *client, const char *data, int len)
             int new_tmp_buf_len = end - start;
             char *new_tmp_buf = calloc(new_tmp_buf_len, sizeof(char));
             memcpy(new_tmp_buf, str_tmp_buf + start, new_tmp_buf_len);
+            if (buf->tmp_buf != NULL)
+            {
+                free(buf->tmp_buf);
+                buf->tmp_buf_len = 0;
+            }
+
             buf->tmp_buf = new_tmp_buf;
             buf->tmp_buf_len = new_tmp_buf_len;
             break;
@@ -122,11 +132,7 @@ process_user_input(struct chat_client *client, const char *data, int len)
         int len;
         if (generate_msg_str(str_tmp_buf, start, end, &str, &len) == 0)
         {
-            char *send_str = calloc(len + sizeof(int), sizeof(char));
-            memcpy(send_str + 4, str, len);
-            int size = htonl(len);
-            memcpy(send_str, (char *)&size, sizeof(int));
-            send_queue_enqueue(send_queue, send_str, len + sizeof(int));
+            send_queue_enqueue_len(send_queue, str, len);
             client->pfd.events |= POLLOUT;
             free(str);
         }
@@ -174,6 +180,17 @@ void chat_client_delete(struct chat_client *client)
 
     send_queue_free(&client->send_queue);
     recv_buf_free(&client->recv_buf);
+
+    struct chat_message *msg;
+    while (queue_dequeue(&client->received, (void **)&msg) != -1)
+    {
+        chat_message_delete(msg);
+    }
+
+    queue_free(&client->received);
+
+    free(client->out_buf.tmp_buf);
+    client->out_buf.tmp_buf_len = 0;
 
     free(client);
 }
@@ -291,7 +308,7 @@ struct chat_message *
 chat_client_pop_next(struct chat_client *client)
 {
     struct chat_message *msg;
-    if (queue_dequeue(&client->received, (void**) &msg) == -1)
+    if (queue_dequeue(&client->received, (void **)&msg) == -1)
     {
         return NULL;
     }

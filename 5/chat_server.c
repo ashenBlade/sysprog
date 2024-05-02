@@ -33,6 +33,15 @@ struct chat_peer
     const char *username;
 };
 
+static void
+chat_peer_free(struct chat_peer *peer)
+{
+    close(peer->socket);
+    send_queue_free(&peer->send_queue);
+    recv_buf_free(&peer->recv_buf);
+    free((void*)peer->username);
+}
+
 struct message_peer
 {
     /* Сокет клиента, который это сообщение отправил */
@@ -116,14 +125,14 @@ void chat_server_delete(struct chat_server *server)
 
     for (int i = 0; i < server->fds_cnt - 1; i++)
     {
-        close(server->peers[i].socket);
+        chat_peer_free(server->peers + i);
     }
 
     free(server->peers);
     free(server->fds);
     queue_free(&server->msgs);
-
     memset(server, 0, sizeof(*server));
+
     free(server);
 }
 
@@ -382,7 +391,7 @@ chat_server_remove_client(struct chat_server *s, int fds_idx)
      * Но если надо удалить последний элемент, то просто зануляем нужную структуру
      */
     /* Закрываем сокет клиента */
-    close(s->fds[fds_idx].fd);
+    chat_peer_free(s->peers + fds_idx - 1);
 
     /* fds */
     if (fds_idx != (s->fds_cnt - 1))

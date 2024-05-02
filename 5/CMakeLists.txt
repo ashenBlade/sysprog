@@ -33,3 +33,13 @@ target_sources(${TESTS_NAME} PRIVATE
     test.c)
 target_link_libraries(${TESTS_NAME} ${LIB_NAME})
 target_include_directories(${TESTS_NAME} PRIVATE ../utils)
+
+
+if(LEAK_CHECK)
+    target_sources(${TESTS_NAME} PRIVATE ../utils/heap_help/heap_help.c)
+    target_compile_definitions(${TESTS_NAME} PRIVATE LEAK_CHECK)
+    target_compile_options(${TESTS_NAME} PRIVATE -ldl -rdynamic)
+
+    target_compile_definitions(${LIB_NAME} PRIVATE LEAK_CHECK)
+endif(LEAK_CHECK)
+

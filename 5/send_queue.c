@@ -21,14 +21,18 @@ void send_queue_free(struct send_queue *q)
         return;
     }
 
-    for (struct send_queue_elem * cur = q->head; cur != NULL; cur = cur->next)
+    struct send_queue_elem *cur = q->head;
+    while (cur != NULL)
     {
         free(cur->data);
         cur->data = NULL;
         cur->len = 0;
         cur->pos = 0;
+        struct send_queue_elem *next = cur->next;
+        free(cur);
+        cur = next;
     }
-
+    
     q->head = NULL;
     q->tail = NULL;
 }
@@ -71,6 +75,7 @@ send_queue_get_pending_chunk(struct send_queue *queue, char **data, int *len)
     {
         return -1;
     }
+
     struct send_queue_elem *head = queue->head;
     assert(head->pos < head->len);
     *data = head->data + head->pos;
@@ -99,9 +104,11 @@ send_queue_record_sent(struct send_queue *queue, int send)
     {
         queue->head = head->next;
     }
+
     head->next = NULL;
     head->pos = 0;
     head->len = 0;
+
     free(head->data);
     free(head);
 }
