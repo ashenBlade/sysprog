@@ -25,6 +25,7 @@ struct chat_message {
 	char *data;
 
 	/* PUT HERE OTHER MEMBERS */
+    int len;
 };
 
 /** Free message's memory. */
